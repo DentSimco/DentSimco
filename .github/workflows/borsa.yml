@@ -1,12 +1,13 @@
-# DentSimco â€” CanlÄ± borsa botu
-# Saat baÅŸÄ± Ã§alÄ±ÅŸÄ±r (her saatin 7. dakikasÄ±, UTC; TÃ¼rkiye = UTC+3). Saat baÅŸÄ±nÄ±n tam kendisi
-# GitHub'da en kalabalÄ±k andÄ±r, bu yÃ¼zden 7. dakika seÃ§ildi.
-# Her Ã§alÄ±ÅŸma 2 dakikanÄ±n altÄ±nda kalÄ±r: ayda 24 Ã— 31 Ã— 2 = 1.488 dakika (Ã¼cretsiz limit 2.000).
+# DentSimco — Canlı borsa botu
+# 15 dakikada bir başlar (UTC; Türkiye = UTC+3) ve tüm ürünler çekilene kadar çalışır.
+# Repo herkese açık olduğu için GitHub Actions dakikası sınırsız.
+# Not: GitHub zamanlanmış çalışmaları yoğun saatlerde birkaç dakika geciktirebilir.
+# Bir çalışma 15 dakikadan uzun sürerse bir sonraki onu bekler, iki çalışma aynı anda koşmaz.
 name: DentSimco Borsa
 
 on:
   schedule:
-    - cron: '7 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   borsa:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
