@@ -250,6 +250,14 @@ export async function main() {
   tasks = tasks.map((t, i) => ({ t, i, s: staleness(t) })).sort((a, b) => (b.s - a.s) || (a.i - b.i)).map((x) => x.t);
 
   const pacer = createPacer({ deadline, ...CONFIG.market });
+  // Çalışma uzun sürebileceği için dakikada bir ilerleme satırı yazılır (Actions log'unda görünür).
+  const progress = setInterval(() => {
+    const sec = Math.round((Date.now() - t0) / 1000);
+    const rate = pacer.stat.ok && sec ? (pacer.stat.ok / sec).toFixed(2) : '0';
+    console.log(`… ${sec} sn: ${pacer.stat.ok}/${tasks.length} ürün çekildi, hız ${rate}/sn, 429=${pacer.stat.throttled}`);
+  }, 60_000);
+  progress.unref?.();
+
   // Her ürünün gerçek çekilme zamanı ayrıca tutulur (çalışma uzun sürerse ürünler farklı anlarda çekilir).
   const results = await runPool(
     tasks,
@@ -259,6 +267,7 @@ export async function main() {
     },
     { concurrency: CONFIG.market.concurrency, delayMs: 0, deadline },
   );
+  clearInterval(progress);
   const throttled = pacer.stat.throttled;
   const fetchMs = Date.now() - t0;
 
