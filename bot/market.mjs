@@ -3,7 +3,7 @@
 // Her çalışmada: iki realm, borsada satılan tüm ürünler, her kalite ayrı ayrı.
 
 import {
-  CONFIG, PATHS, fetchJson, runPool, utcDay, hhmm, addDays, shardOf, range, round, parseJSON, runIfMain,
+  CONFIG, PATHS, fetchJson, fetchPaced, createPacer, runPool, utcDay, hhmm, addDays, shardOf, range, round, parseJSON, runIfMain,
 } from './common.mjs';
 import { Firestore } from './firestore.mjs';
 
@@ -237,20 +237,19 @@ export async function main() {
     prevLive[r] = parseJSON(docs.get(PATHS.live(r))?.data)?.items || {};
   }
 
-  // 3) Borsayı çek (realm'ler sırayla karışık; her çalışmada başlangıç noktası kayar)
+  // 3) Borsayı çek. En uzun süredir güncellenmeyen (ya da hiç çekilmemiş) ürünler öne alınır,
+  //    böylece sunucu hız sınırı koysa bile her çalışmada sıradaki ürünlerden devam edilir.
   let tasks = interleave(realms.map((r) => (tradable[r] || []).map((id) => ({ r, id: Number(id) }))));
-  const offset = tasks.length ? (Math.floor(t0 / 60000) * 7) % tasks.length : 0;
-  tasks = [...tasks.slice(offset), ...tasks.slice(0, offset)];
+  const lastSeen = (t) => prevLive[t.r]?.[t.id]?.[0] ?? 0;
+  tasks = tasks.map((t, i) => ({ t, i })).sort((a, b) => lastSeen(a.t) - lastSeen(b.t) || a.i - b.i).map((x) => x.t);
 
-  let throttled = 0;
+  const pacer = createPacer({ deadline, ...CONFIG.market });
   const results = await runPool(
     tasks,
-    (t, control) => fetchJson(`${CONFIG.simcoBase}/api/v3/market/${t.r}/${t.id}/`, {
-      deadline,
-      onThrottle: () => { throttled++; control.slowDown(); },
-    }),
-    { ...CONFIG.market, deadline },
+    (t) => fetchPaced(`${CONFIG.simcoBase}/api/v3/market/${t.r}/${t.id}/`, pacer, { deadline, retries: CONFIG.market.retries }),
+    { concurrency: CONFIG.market.concurrency, delayMs: 0, deadline },
   );
+  const throttled = pacer.stat.throttled;
   const fetchMs = Date.now() - t0;
 
   // 4) Hesapla
@@ -297,7 +296,8 @@ export async function main() {
       writes.push({ type: 'set', path: PATHS.live(r), data: { data: JSON.stringify({ v: VERSION, t: t0, items: newLive[r] }), u: t0 } });
     }
   }
-  const status = { v: VERSION, t: t0, fetchMs, totalMs: Date.now() - t0, throttled, stats, errors };
+  const rate = { perSec: pacer.stat.ok && fetchMs ? round(pacer.stat.ok / (fetchMs / 1000), 2) : 0, intervalMs: pacer.interval, retryAfterMs: pacer.stat.retryAfterSeen, note: pacer.stat.note };
+  const status = { v: VERSION, t: t0, fetchMs, totalMs: Date.now() - t0, throttled, rate, stats, errors };
   writes.push({ type: 'set', path: PATHS.meta('status'), data: { data: JSON.stringify(status), u: t0 } });
   await db.commit(writes);
 
@@ -305,8 +305,9 @@ export async function main() {
   let rolled = 0;
   if (needsRollup && totalOk > 0) rolled = await rollup(db, marker, day);
 
-  console.log(`DentSimco borsa | ${summary} | 429=${throttled} | çekme=${(fetchMs / 1000).toFixed(1)}sn | toplam=${((Date.now() - t0) / 1000).toFixed(1)}sn${rolled ? ` | günlük özet=${rolled}` : ''}`);
+  console.log(`DentSimco borsa | ${summary} | 429=${throttled} | hız=${rate.perSec}/sn aralık=${rate.intervalMs}ms | çekme=${(fetchMs / 1000).toFixed(1)}sn | toplam=${((Date.now() - t0) / 1000).toFixed(1)}sn${rolled ? ` | günlük özet=${rolled}` : ''}`);
   if (errors.length) console.log('İlk hatalar:', errors.slice(0, 5).join(' ; '));
+  if (pacer.stat.note || pacer.stat.retryAfterSeen) console.log(`Sunucu yanıtı (429): ${pacer.stat.note || '-'} | en uzun bekleme=${((pacer.stat.longestPauseMs) / 1000).toFixed(1)}sn`);
   if (totalOk === 0) throw new Error('Hiçbir ürün çekilemedi. Oyun API erişimini kontrol et.');
 }
 
