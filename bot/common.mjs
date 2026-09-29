@@ -24,10 +24,13 @@ export const CONFIG = {
   rawRetentionDays: 35,
 
   // Her çalışma 1 dakikanın altında kalsın diye borsa çekme işi bu süre sonunda durur (ms).
-  fetchBudgetMs: 50000,
-  fetchBudgetOnRollupMs: 42000,
+  // Bot saat başı çalışır. GitHub her çalışmayı dakikaya yuvarlar; 2 dakikanın altında kalırsak
+  // ayda 744 × 2 = 1.488 dakika harcar (ücretsiz limit 2.000).
+  fetchBudgetMs: 100000,
+  fetchBudgetOnRollupMs: 86000,
 
-  market: { concurrency: 3, delayMs: 300 },
+  // Sunucu "yavaş ol" (429) deyince hız kendiliğinden düşer, sorun çıkmadıkça yeniden artar.
+  market: { concurrency: 4, startIntervalMs: 350, minIntervalMs: 120, maxIntervalMs: 4000, retries: 12 },
   constants: { concurrency: 3, delayMs: 300 },
 
   stateMaxPerQuality: 250,
@@ -100,6 +103,104 @@ export async function fetchJson(url, { deadline = Infinity, retries = 3, onThrot
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
+  }
+  throw lastError;
+}
+
+// ---- Uyarlanabilir hız kontrolü ----
+// Tüm istekler tek kapıdan geçer: iki istek arası en az `interval` ms olur.
+// Sunucu 429 verirse herkes birlikte bekler (Retry-After varsa ona uyulur) ve aralık büyür.
+// Sorunsuz istekler birikince aralık yavaş yavaş küçülür.
+export function createPacer({ deadline = Infinity, startIntervalMs = 350, minIntervalMs = 120, maxIntervalMs = 4000 } = {}) {
+  let interval = startIntervalMs;
+  let nextAt = 0;
+  let blockedUntil = 0;
+  let penalty = 0;
+  let streak = 0;
+  const stat = { ok: 0, throttled: 0, longestPauseMs: 0, retryAfterSeen: null, note: null, firstAt: 0, lastAt: 0 };
+  return {
+    stat,
+    get interval() { return interval; },
+    async take() {
+      for (;;) {
+        const now = Date.now();
+        if (now >= deadline) return false;
+        const at = Math.max(nextAt, blockedUntil, now);
+        if (at >= deadline) return false;
+        if (at === now) {
+          nextAt = now + interval;
+          if (!stat.firstAt) stat.firstAt = now;
+          return true;
+        }
+        await sleep(Math.min(at - now, 400));
+      }
+    },
+    success() {
+      stat.ok++;
+      stat.lastAt = Date.now();
+      penalty = 0;
+      if (++streak >= 8) {
+        streak = 0;
+        interval = Math.max(minIntervalMs, Math.round(interval * 0.9));
+      }
+    },
+    throttle(retryAfterMs = 0, note = null) {
+      stat.throttled++;
+      streak = 0;
+      if (retryAfterMs > 0) stat.retryAfterSeen = Math.max(stat.retryAfterSeen || 0, retryAfterMs);
+      if (note && !stat.note) stat.note = note;
+      const now = Date.now();
+      if (now < blockedUntil) return; // biri zaten bekletiyor
+      penalty = Math.min(6, penalty + 1);
+      const pause = retryAfterMs > 0 ? Math.min(retryAfterMs, 60_000) : Math.min(20_000, 1000 * 2 ** penalty);
+      blockedUntil = now + pause;
+      stat.longestPauseMs = Math.max(stat.longestPauseMs, pause);
+      interval = Math.min(maxIntervalMs, Math.round(interval * 1.5));
+    },
+  };
+}
+
+function parseRetryAfter(value) {
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : 0;
+}
+
+// fetchJson'ın hız kontrollü sürümü: 429 alınca kalan denemeyi harcamadan sırada bekler.
+export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 12 } = {}) {
+  let lastError = new Error('bilinmeyen hata');
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (!(await pacer.take())) throw Object.assign(new Error('süre doldu'), { deadline: true });
+    const remaining = deadline - Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, Math.min(15000, remaining)));
+    let res;
+    try {
+      res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+    } catch (e) {
+      clearTimeout(timer);
+      lastError = e;
+      continue;
+    }
+    clearTimeout(timer);
+    if (res.status === 429) {
+      let note = null;
+      try { note = `${res.headers.get('retry-after') ? `retry-after=${res.headers.get('retry-after')} ` : ''}${(await res.text()).replace(/\s+/g, ' ').slice(0, 120)}`; } catch { /* önemsiz */ }
+      pacer.throttle(parseRetryAfter(res.headers.get('retry-after')), note);
+      lastError = new Error('HTTP 429');
+      continue;
+    }
+    if (res.status >= 500) {
+      pacer.throttle(0);
+      lastError = new Error(`HTTP ${res.status}`);
+      continue;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    pacer.success();
+    return json;
   }
   throw lastError;
 }
