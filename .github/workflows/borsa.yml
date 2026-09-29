@@ -1,33 +1,12 @@
 # DentSimco â€” CanlÄ± borsa botu
-# GÃ¼nde 63 kez, yaklaÅŸÄ±k 23 dakikada bir Ã§alÄ±ÅŸÄ±r (saatler UTC; TÃ¼rkiye = UTC+3).
-# Not: "*/23" yazÄ±lsaydÄ± her saatin 00, 23, 46. dakikasÄ±nda, yani gÃ¼nde 72 kez Ã§alÄ±ÅŸÄ±rdÄ±.
+# Saat baÅŸÄ± Ã§alÄ±ÅŸÄ±r (her saatin 7. dakikasÄ±, UTC; TÃ¼rkiye = UTC+3). Saat baÅŸÄ±nÄ±n tam kendisi
+# GitHub'da en kalabalÄ±k andÄ±r, bu yÃ¼zden 7. dakika seÃ§ildi.
+# Her Ã§alÄ±ÅŸma 2 dakikanÄ±n altÄ±nda kalÄ±r: ayda 24 Ã— 31 Ã— 2 = 1.488 dakika (Ã¼cretsiz limit 2.000).
 name: DentSimco Borsa
 
 on:
   schedule:
-    - cron: '0,23,46 0,23 * * *'
-    - cron: '9,32,55 1 * * *'
-    - cron: '18,41 2 * * *'
-    - cron: '4,27,50 3 * * *'
-    - cron: '13,36,59 4 * * *'
-    - cron: '22,45 5 * * *'
-    - cron: '8,31,54 6 * * *'
-    - cron: '17,40 7 * * *'
-    - cron: '3,26,49 8 * * *'
-    - cron: '12,35,58 9 * * *'
-    - cron: '21,44 10 * * *'
-    - cron: '7,30,53 11 * * *'
-    - cron: '16,39 12 * * *'
-    - cron: '2,25,48 13 * * *'
-    - cron: '11,34,57 14 * * *'
-    - cron: '20,43 15 * * *'
-    - cron: '6,29,52 16 * * *'
-    - cron: '15,38 17 * * *'
-    - cron: '1,24,47 18 * * *'
-    - cron: '10,33,56 19 * * *'
-    - cron: '19,42 20 * * *'
-    - cron: '5,28,51 21 * * *'
-    - cron: '14,37 22 * * *'
+    - cron: '7 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -40,9 +19,9 @@ concurrency:
 jobs:
   borsa:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           sparse-checkout: bot
       - name: Borsa verisini topla
