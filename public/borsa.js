@@ -395,6 +395,12 @@ export function mountBorsa(root, { realm = 0 } = {}) {
       save();
       el.alert.hidden = true;
       renderAll(transition);
+      if (!snap) {
+        const n = Object.keys(b.live?.items || {}).length;
+        showAlert(!b.live
+          ? 'Canlı veri belgesi (live/r' + r + ') okunamadı ya da içi boş.'
+          : `Canlı veri belgesinde bu ürün yok (belgede ${n} ürün var, ürün no ${chosen.id}).`);
+      }
     } catch (e) {
       if (my !== token || destroyed) return;
       showAlert(e?.message || String(e));
