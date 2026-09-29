@@ -24,10 +24,10 @@ export const CONFIG = {
   rawRetentionDays: 35,
 
   // Her çalışma 1 dakikanın altında kalsın diye borsa çekme işi bu süre sonunda durur (ms).
-  fetchBudgetMs: 36000,
-  fetchBudgetOnRollupMs: 30000,
+  fetchBudgetMs: 50000,
+  fetchBudgetOnRollupMs: 42000,
 
-  market: { concurrency: 6, delayMs: 100 },
+  market: { concurrency: 3, delayMs: 300 },
   constants: { concurrency: 3, delayMs: 300 },
 
   stateMaxPerQuality: 250,
