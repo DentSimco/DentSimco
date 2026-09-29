@@ -203,7 +203,7 @@ function change24h(product, q, snap) {
       const old = pt.qs[q]?.[0];
       if (old == null) continue;
       const d = Math.abs(pt.t - target);
-      if (d <= 100 * MIN && (!best || d < best.d)) best = { d, p: old };
+      if (d <= 50 * MIN && (!best || d < best.d)) best = { d, p: old };
     }
   }
   return best ? now / best.p - 1 : null;
@@ -213,8 +213,8 @@ function freshness(t, now) {
   if (!t) return { level: 'stale', text: 'Henüz ölçüm yok' };
   const age = now - t;
   const when = `${age < DAY ? fmtTime(t) : fmtDateTime(t)} (${fmtAgo(t, now)})`;
-  if (age <= 75 * MIN) return { level: 'live', text: `Güncel, son ölçüm ${when}` };
-  if (age <= 3 * HOUR) return { level: 'late', text: `Gecikmeli, son ölçüm ${when}` };
+  if (age <= 40 * MIN) return { level: 'live', text: `Güncel, son ölçüm ${when}` };
+  if (age <= 2 * HOUR) return { level: 'late', text: `Gecikmeli, son ölçüm ${when}` };
   return { level: 'stale', text: `Eski veri, son ölçüm ${when}` };
 }
 
@@ -549,7 +549,7 @@ export function mountBorsa(root, { realm = 0 } = {}) {
   function renderFoot(now) {
     const rg = range();
     const bars = rg.kind === 'daily' ? 'Her sütun bir günün satışı.'
-      : rg.bucket ? 'Her sütun 2 saatlik satış.' : 'Her sütun iki ölçüm arası (yaklaşık 1 saat) satış.';
+      : rg.bucket ? 'Her sütun 2 saatlik satış.' : 'Her sütun iki ölçüm arası (yaklaşık 15 dk) satış.';
     const few = rg.kind === 'daily' && shown.xs.length <= 3 ? ' Günlük geçmiş, bot her gece bir gün ekledikçe uzar.' : '';
     el.foot.textContent = `${bars} Hacim ve VWAP, ilanlardaki azalmadan tahmin edilir. Gün sınırı UTC gece yarısı (senin saatinle ${fmtTime(dayStart(utcDay(now)))}).${few}`;
   }
@@ -721,12 +721,12 @@ export function mountBorsa(root, { realm = 0 } = {}) {
   el.reload.addEventListener('click', () => refresh({ transition: 'update', fresh: true }));
   el.retry.addEventListener('click', () => refresh({ transition: product ? 'update' : 'sweep', fresh: true }));
 
-  // Bot saat başı yazar. Veri 65 dakikadan eskiyse 5 dakikada bir yeniden bakılır.
+  // Bot 15 dakikada bir yazar. Veri 25 dakikadan eskiyse 3 dakikada bir yeniden bakılır.
   function tick() {
     if (destroyed || document.visibilityState !== 'visible' || !basics) return;
     const now = Date.now();
     if (snap) setFresh(freshness(snap.t, now));
-    if (now - (basics.live?.t || 0) < 65 * MIN || now - lastAuto < 5 * MIN) return;
+    if (now - (basics.live?.t || 0) < 25 * MIN || now - lastAuto < 3 * MIN) return;
     lastAuto = now;
     refresh({ transition: 'update', fresh: true });
   }
