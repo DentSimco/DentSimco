@@ -31,6 +31,11 @@ export const CONFIG = {
 
   // Sunucu "yavaş ol" (429) deyince hız kendiliğinden düşer, sorun çıkmadıkça yeniden artar.
   market: { concurrency: 4, startIntervalMs: 350, minIntervalMs: 120, maxIntervalMs: 4000, retries: 12 },
+
+  // Sunucu hız sınırı koyduğunda her ürüne yetişilemez. En çok girdi olarak kullanılan ürünler
+  // (Taşıma, Enerji, Su, Tohum, Çelik, Alüminyum...) diğerlerinden yaklaşık 4 kat sık güncellenir.
+  hotProducts: [13, 1, 2, 66, 18, 21, 43, 19, 17, 22, 135, 23, 120, 117],
+  hotFactor: 4,
   constants: { concurrency: 3, delayMs: 300 },
 
   stateMaxPerQuality: 250,
