@@ -1,0 +1,36 @@
+# DentSimco — Dashboard yayını (Firebase Hosting)
+# public/ klasörü ya da firebase.json değişince kendiliğinden çalışır, yaklaşık 1 dakika sürer.
+# Elle çalıştırmak için: Actions > DentSimco Site > Run workflow
+# Adres: https://dentsimco-e1c85.web.app
+name: DentSimco Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'firebase.json'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dentsimco-site
+  cancel-in-progress: true
+
+jobs:
+  yayinla:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: public
+      - name: Firebase Hosting'e yayınla
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          projectId: dentsimco-e1c85
+          channelId: live
