@@ -240,8 +240,14 @@ export async function main() {
   // 3) Borsayı çek. En uzun süredir güncellenmeyen (ya da hiç çekilmemiş) ürünler öne alınır,
   //    böylece sunucu hız sınırı koysa bile her çalışmada sıradaki ürünlerden devam edilir.
   let tasks = interleave(realms.map((r) => (tradable[r] || []).map((id) => ({ r, id: Number(id) }))));
-  const lastSeen = (t) => prevLive[t.r]?.[t.id]?.[0] ?? 0;
-  tasks = tasks.map((t, i) => ({ t, i })).sort((a, b) => lastSeen(a.t) - lastSeen(b.t) || a.i - b.i).map((x) => x.t);
+  // Öncelik = "bayatlık". Sık kullanılan ürünlerin bayatlığı hotFactor kat sayılır, böylece daha sık sıra gelir.
+  const hot = new Set(CONFIG.hotProducts || []);
+  const staleness = (t) => {
+    const seen = prevLive[t.r]?.[t.id]?.[0];
+    if (!seen) return Infinity; // hiç çekilmemiş ürünler en öne
+    return (t0 - seen) * (hot.has(t.id) ? CONFIG.hotFactor || 1 : 1);
+  };
+  tasks = tasks.map((t, i) => ({ t, i, s: staleness(t) })).sort((a, b) => (b.s - a.s) || (a.i - b.i)).map((x) => x.t);
 
   const pacer = createPacer({ deadline, ...CONFIG.market });
   const results = await runPool(
