@@ -250,9 +250,13 @@ export async function main() {
   tasks = tasks.map((t, i) => ({ t, i, s: staleness(t) })).sort((a, b) => (b.s - a.s) || (a.i - b.i)).map((x) => x.t);
 
   const pacer = createPacer({ deadline, ...CONFIG.market });
+  // Her ürünün gerçek çekilme zamanı ayrıca tutulur (çalışma uzun sürerse ürünler farklı anlarda çekilir).
   const results = await runPool(
     tasks,
-    (t) => fetchPaced(`${CONFIG.simcoBase}/api/v3/market/${t.r}/${t.id}/`, pacer, { deadline, retries: CONFIG.market.retries }),
+    async (t) => {
+      const data = await fetchPaced(`${CONFIG.simcoBase}/api/v3/market/${t.r}/${t.id}/`, pacer, { deadline, retries: CONFIG.market.retries });
+      return { data, at: Date.now() };
+    },
     { concurrency: CONFIG.market.concurrency, delayMs: 0, deadline },
   );
   const throttled = pacer.stat.throttled;
@@ -271,10 +275,10 @@ export async function main() {
     if (!res || res.error?.deadline) { stats[r].skipped++; return; }
     try {
       if (!res.ok) throw res.error;
-      const orders = parseOrders(res.value);
+      const orders = parseOrders(res.value.data);
       const metrics = computeMetrics(orders, prevState[r][id]);
       newState[r][id] = buildState(orders);
-      newLive[r][id] = [t0, metrics];
+      newLive[r][id] = [res.value.at, metrics];
       ((intraday[`${r}_${shardOf(id)}`] ||= {})[id] = metrics);
       touched.add(`${r}_${shardOf(id)}`);
       stats[r].ok++;
@@ -313,6 +317,8 @@ export async function main() {
 
   console.log(`DentSimco borsa | ${summary} | 429=${throttled} | hız=${rate.perSec}/sn aralık=${rate.intervalMs}ms | çekme=${(fetchMs / 1000).toFixed(1)}sn | toplam=${((Date.now() - t0) / 1000).toFixed(1)}sn${rolled ? ` | günlük özet=${rolled}` : ''}`);
   if (errors.length) console.log('İlk hatalar:', errors.slice(0, 5).join(' ; '));
+  const missing = realms.reduce((sum, r) => sum + stats[r].skipped + stats[r].fail, 0);
+  if (missing > 0) console.log(`UYARI: ${missing} ürün bu çalışmada çekilemedi; sonraki çalışma en eski üründen devam eder.`);
   if (pacer.stat.note || pacer.stat.retryAfterSeen) console.log(`Sunucu yanıtı (429): ${pacer.stat.note || '-'} | en uzun bekleme=${((pacer.stat.longestPauseMs) / 1000).toFixed(1)}sn`);
   if (totalOk === 0) throw new Error('Hiçbir ürün çekilemedi. Oyun API erişimini kontrol et.');
 }
