@@ -24,13 +24,14 @@ export const CONFIG = {
   rawRetentionDays: 35,
 
   // Her çalışma 1 dakikanın altında kalsın diye borsa çekme işi bu süre sonunda durur (ms).
-  // Bot saat başı çalışır. GitHub her çalışmayı dakikaya yuvarlar; 2 dakikanın altında kalırsak
-  // ayda 744 × 2 = 1.488 dakika harcar (ücretsiz limit 2.000).
-  fetchBudgetMs: 100000,
-  fetchBudgetOnRollupMs: 86000,
+  // Repo herkese açık olduğu için GitHub Actions dakikası sınırsız. Bot 15 dakikada bir başlar ve
+  // tüm ürünler çekilene kadar çalışır; 30 dakikada bitiremezse kalanı sonraki çalışma en bayat üründen sürdürür.
+  fetchBudgetMs: 30 * 60_000,
+  fetchBudgetOnRollupMs: 30 * 60_000,
 
   // Sunucu "yavaş ol" (429) deyince hız kendiliğinden düşer, sorun çıkmadıkça yeniden artar.
-  market: { concurrency: 4, startIntervalMs: 350, minIntervalMs: 120, maxIntervalMs: 4000, retries: 12 },
+  // retries: 429 dışındaki hatalarda (sunucu 5xx, bağlantı kopması) kaç kez yeniden denenir. 429'da süre bitene kadar beklenir.
+  market: { concurrency: 6, startIntervalMs: 250, minIntervalMs: 100, maxIntervalMs: 4000, retries: 6 },
 
   // Sunucu hız sınırı koyduğunda her ürüne yetişilemez. En çok girdi olarak kullanılan ürünler
   // (Taşıma, Enerji, Su, Tohum, Çelik, Alüminyum...) diğerlerinden yaklaşık 4 kat sık güncellenir.
@@ -144,9 +145,10 @@ export function createPacer({ deadline = Infinity, startIntervalMs = 350, minInt
       stat.ok++;
       stat.lastAt = Date.now();
       penalty = 0;
-      if (++streak >= 8) {
+      // Toparlanma hızlı olmalı: 3 sorunsuz istekte aralık %20 kısalır (4 sn'den 250 ms'ye yaklaşık 1 dakikada iner).
+      if (++streak >= 3) {
         streak = 0;
-        interval = Math.max(minIntervalMs, Math.round(interval * 0.9));
+        interval = Math.max(minIntervalMs, Math.round(interval * 0.8));
       }
     },
     throttle(retryAfterMs = 0, note = null) {
@@ -174,9 +176,10 @@ function parseRetryAfter(value) {
 }
 
 // fetchJson'ın hız kontrollü sürümü: 429 alınca kalan denemeyi harcamadan sırada bekler.
-export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 12 } = {}) {
+export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 6 } = {}) {
   let lastError = new Error('bilinmeyen hata');
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  let hardFails = 0; // 429 dışı hatalar; 429'da süre bitene kadar beklenir
+  for (;;) {
     if (!(await pacer.take())) throw Object.assign(new Error('süre doldu'), { deadline: true });
     const remaining = deadline - Date.now();
     const controller = new AbortController();
@@ -187,6 +190,7 @@ export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 12
     } catch (e) {
       clearTimeout(timer);
       lastError = e;
+      if (++hardFails > retries) throw lastError;
       continue;
     }
     clearTimeout(timer);
@@ -198,8 +202,10 @@ export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 12
       continue;
     }
     if (res.status >= 500) {
-      pacer.throttle(0);
+      // Tek ürüne özgü sunucu hatası tüm botu yavaşlatmamalı: sadece bu ürün kısa bekleyip yeniden dener.
       lastError = new Error(`HTTP ${res.status}`);
+      if (++hardFails > retries) throw lastError;
+      await sleep(Math.min(3000, 500 * hardFails));
       continue;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -207,7 +213,6 @@ export async function fetchPaced(url, pacer, { deadline = Infinity, retries = 12
     pacer.success();
     return json;
   }
-  throw lastError;
 }
 
 // İşleri aynı anda en fazla `concurrency` tane olacak şekilde çalıştırır.
