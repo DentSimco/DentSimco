@@ -238,7 +238,7 @@ export function createChart(host, { series, formatPrice, formatVolume, formatTic
     const x1 = w - Math.ceil(Math.min(120, Math.max(42, gutter + 16)));
 
     // Zaman ekseni
-    const stepMs = medianStep(xs) || (data.daily ? DAY : 23 * MIN);
+    const stepMs = medianStep(xs) || (data.daily ? DAY : HOUR);
     const xMin = xs[0] - stepMs / 2;
     const xMax = xs[n - 1] + stepMs / 2;
     const px = (t) => x0 + ((t - xMin) / (xMax - xMin)) * (x1 - x0);
