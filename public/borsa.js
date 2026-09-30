@@ -23,12 +23,12 @@ const SERIES_BY_KEY = Object.fromEntries(SERIES.map((s) => [s.key, s]));
 
 function seriesLabel(key, { q, daily }) {
   switch (key) {
-    case 'anlik': return daily ? 'Gün sonu fiyatı' : 'Anlık en düşük';
+    case 'anlik': return daily ? 'Kapanış' : 'Anlık en düşük';
     case 'dusuk': return 'Gün en düşük';
     case 'yuksek': return 'Gün en yüksek';
     case 'vwap': return 'VWAP';
-    case 'hacim': return `Q${q} hacim`;
-    default: return 'Toplam hacim';
+    case 'hacim': return `Q${q} lot`;
+    default: return 'Toplam lot';
   }
 }
 
@@ -241,9 +241,9 @@ const ICON_RELOAD = '<svg viewBox="0 0 20 20" width="18" height="18" aria-hidden
 
 const FIGS = [
   ['vwap', 'VWAP bugün'],
-  ['hacim', 'Hacim bugün'],
-  ['toplam', 'Toplam hacim bugün'],
-  ['arz', 'Arz şimdi'],
+  ['hacim', 'Lot'],
+  ['toplam', 'İşlem Hacmi ($)'],
+  ['arz', 'Derinlik'],
 ];
 
 const TEMPLATE = `
@@ -309,7 +309,7 @@ const TEMPLATE = `
     <h2 class="quality-title">Kaliteler, bugün</h2>
     <div class="table-wrap">
       <table class="qt">
-        <thead><tr><th scope="col">Kalite</th><th scope="col">Anlık</th><th scope="col">Arz</th><th scope="col">Hacim</th><th scope="col">VWAP</th><th scope="col">Pay</th></tr></thead>
+        <thead><tr><th scope="col">Kalite</th><th scope="col">Anlık</th><th scope="col">Derinlik</th><th scope="col">Lot</th><th scope="col">VWAP</th><th scope="col">Pay</th></tr></thead>
         <tbody data-el="rows"></tbody>
         <tfoot data-el="total"></tfoot>
       </table>
@@ -510,11 +510,9 @@ export function mountBorsa(root, { realm = 0 } = {}) {
     if (pos != null) el.mark.style.left = `${Math.max(0, Math.min(1, pos)) * 100}%`;
 
     const sold = d?.[5] ?? null;
-    let total = null;
-    for (const m of Object.values(todaySum)) if (m[5] != null) total = (total ?? 0) + m[5];
     figs.vwap.textContent = fmtPrice(sold > 0 ? d[6] / sold : null);
     figs.hacim.textContent = fmtNum(sold);
-    figs.toplam.textContent = fmtNum(total);
+    figs.toplam.textContent = fmtNum(d?.[6] ?? null); // seçili kalitenin bugünkü satış tutarı ($)
     figs.arz.textContent = snap ? fmtNum(cur?.[1] ?? 0) : '—';
     setFresh(freshness(snap?.t, now));
   }
@@ -551,7 +549,7 @@ export function mountBorsa(root, { realm = 0 } = {}) {
     const bars = rg.kind === 'daily' ? 'Her sütun bir günün satışı.'
       : rg.bucket ? 'Her sütun 2 saatlik satış.' : 'Her sütun iki ölçüm arası (yaklaşık 15 dk) satış.';
     const few = rg.kind === 'daily' && shown.xs.length <= 3 ? ' Günlük geçmiş, bot her gece bir gün ekledikçe uzar.' : '';
-    el.foot.textContent = `${bars} Hacim ve VWAP, ilanlardaki azalmadan tahmin edilir. Gün sınırı UTC gece yarısı (senin saatinle ${fmtTime(dayStart(utcDay(now)))}).${few}`;
+    el.foot.textContent = `${bars} Lot, işlem hacmi ve VWAP, ilanlardaki azalmadan tahmin edilir. Gün sınırı UTC gece yarısı (senin saatinle ${fmtTime(dayStart(utcDay(now)))}).${few}`;
   }
 
   function renderTable() {
