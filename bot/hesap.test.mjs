@@ -428,6 +428,15 @@ test('Şimdiki çekirdek değerlerle (655, 700, 745) etki eski tablodan yaklaş�
 // =====================================================================================================
 section('İç tutarlılık');
 
+// ---- Kalitesi olmayan ürünler: araştırma ürünleri ve Taşıma ----
+test('hasQuality: araştırma ve Taşıma kalitesiz, portakal suyu kaliteli', () => {
+  eq([H.hasQuality(DATA.products[29]), H.hasQuality(DATA.products[13]), H.hasQuality(DATA.products[124]), H.hasQuality(undefined)], [false, false, true, false]);
+});
+test('Kalitesiz üründe kayıtlı kalite yok sayılır (hep Q0); kaliteli ürün etkilenmez', () => {
+  const r = plan({ buildings: [{ product: 29, level: 1, quality: 7 }, { product: 13, level: 1, quality: 5 }, { product: 124, level: 1, quality: 5 }] });
+  eq(r.rows.map((x) => x.quality), [0, 0, 5]);
+});
+
 // ---- Üretim hızı: elle girilen bonus + rekreasyon (kullanıcı örnekleri) ----
 test('Üretim hızı: elle %9, rekreasyon 0 → toplam %9', () => {
   near(H.speedBonus({ extraBonusPct: 9, recreation: { park: 0, temple: 0, lake: 0 } }, 'production'), 0.09, 6);
