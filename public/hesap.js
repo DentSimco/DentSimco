@@ -65,6 +65,12 @@ export const qualityKey = (product, quality) => `${product}:${quality}`;
 export const clampQuality = (quality) => clamp(Math.floor(num(quality, 0)), 0, MAX_QUALITY);
 const toLevel = (level) => Math.max(0, Math.floor(num(level, 0)));
 
+// Kalite seçilemeyen ürünler: araştırma ürünleri ve Taşıma. Bunlar hep Q0 sayılır.
+// Başka ürün eklemek için kimliğini (ID) buraya yazın ya da bota "noQuality" alanı ekleyin.
+export const NO_QUALITY_PRODUCTS = new Set([TRANSPORT_ID]);
+export const hasQuality = (product) => !!product && !product.research && !product.noQuality && !NO_QUALITY_PRODUCTS.has(product.id);
+const productQuality = (product, quality) => (product && !hasQuality(product) ? 0 : clampQuality(quality));
+
 // ---------------------------------------------------------------------------------------------------------------
 // Veri: Firestore'daki meta belgeleri (products_r{r}, buildings, core, modifiers_r{r}) tek biçime çevrilir.
 // ---------------------------------------------------------------------------------------------------------------
@@ -94,6 +100,7 @@ export function normalizeData({ products = {}, buildings = {}, core = {}, modifi
       baseSalary: p.baseSalary != null ? num(p.baseSalary, 0) : modifier != null ? modifier * averageSalary : 0,
       transport: num(p.transportNeeded ?? p.transport, 0),
       research: !!p.research,
+      noQuality: !!p.noQuality,
       tradable: p.exchangeTradable !== false,
     };
   }
@@ -220,7 +227,7 @@ export function buildingRate(building, setup, data, admin, now = Date.now()) {
   const notes = [];
   const p = data.products[b.product];
   const level = toLevel(b.level);
-  const quality = clampQuality(b.quality);
+  const quality = productQuality(p, b.quality);
   if (!p) {
     return { id: b.id, ok: false, type: b.type, product: b.product, quality, level, errors: ['Ürün seçilmedi'], notes,
       hourly: 0, daily: 0, wageHour: 0, wageDayGross: 0, wageDayNet: 0 };
@@ -352,7 +359,7 @@ export function quickAdd(product, quality, missingPerHour, setup, data, now = Da
   if (bonus >= 1) return null;
   const eventPct = setup.events?.[product] === false ? 0 : activeEventPct(data, product, now);
   const perLevelHour = (p.perHour * phaseSpeedFactor(data, setup, p) * (1 + eventPct / 100)) / (1 - bonus);
-  return { type: p.building, product, quality: clampQuality(quality), perLevelHour,
+  return { type: p.building, product, quality: productQuality(p, quality), perLevelHour,
     levels: Math.max(1, Math.ceil(missingPerHour / perLevelHour - 1e-9)) };
 }
 
@@ -364,12 +371,12 @@ export function autoQuality(setup, data) {
     for (const b of buildings) {
       const p = data.products[b.product];
       if (!p) continue;
-      const q = minInputQuality(b.quality);
+      const q = minInputQuality(productQuality(p, b.quality));
       for (const [input] of p.inputs) need.set(input, Math.max(need.get(input) ?? 0, q));
     }
     let changed = false;
     for (const b of buildings) {
-      if (!need.has(b.product)) continue;
+      if (!need.has(b.product) || !hasQuality(data.products[b.product])) continue;
       const q = need.get(b.product);
       if (clampQuality(b.quality) !== q) {
         b.quality = q;
@@ -678,4 +685,3 @@ export function executiveAnalysis(setup, data, plan, { scope = 'plan' } = {}) {
     members,
   };
 }
-
