@@ -16,7 +16,7 @@
 //   economyPhase: 0,                              // 0 Durgunluk, 1 Normal, 2 Büyüme (null: verinin fazı)
 //   otherWagesDay: 0,                             // planda olmayan binaların günlük maaşı (yönetim dahil); yönetici analizi için
 //   events: { [productId]: false },               // oyun olayı kapatılan ürünler (varsayılan: hepsi açık)
-//   extraBonusPct: 0,                             // arayüzde YOK: yalnız oyunun kendi hesaplayıcısıyla karşılaştırma testleri
+//   extraBonusPct: 0,                             // Kurulum > Üretim hızı (elle, %); rekreasyon bonusuna eklenir
 //   academyLevel: 20, otherLevels: 0,             // planda olmayan binalar da yönetim giderine girer
 //   admin: { mode: 'savings' | 'net' | 'executives', savingsPct: 62, netPct: 72.65 },
 //   executives: [{ name, position: 'o', salary: 225000, skills: { coo, cfo, cmo, cto }, active: true }],
@@ -678,3 +678,4 @@ export function executiveAnalysis(setup, data, plan, { scope = 'plan' } = {}) {
     members,
   };
 }
+
