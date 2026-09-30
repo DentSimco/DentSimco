@@ -56,7 +56,7 @@ const uid = (p) => `${p}${Date.now().toString(36)}${Math.random().toString(36).s
 
 function defaultSetup() {
   return {
-    v: 1, buildings: [], recreation: { park: 0, temple: 0, lake: 0 }, economyPhase: 0,
+    v: 1, buildings: [], recreation: { park: 0, temple: 0, lake: 0 }, extraBonusPct: 0, economyPhase: 0,
     academyLevel: 0, otherLevels: 0, otherWagesDay: 0,
     admin: { mode: 'savings', savingsPct: 0, netPct: 0 }, executives: [], events: {},
     substitution: true, buyPolicy: 'cheapest',
@@ -81,6 +81,7 @@ function sanitizeSetup(raw) {
       skills: Object.fromEntries(H.SKILLS.map((k) => [k, Number(e.skills?.[k]) || 0])), active: e.active !== false }));
   if (![0, 1, 2].includes(Number(s.economyPhase))) s.economyPhase = 0;
   s.economyPhase = Number(s.economyPhase);
+  s.extraBonusPct = Math.min(99, Math.max(0, Number(raw.extraBonusPct) || 0));
   return s;
 }
 function loadSetup(r) {
@@ -532,6 +533,9 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const a = plan.admin;
     const planLevels = (setup.buildings || []).reduce((t, b) => t + (b.level || 0), 0);
     const recBonus = H.recreationBonus(setup.recreation);
+    const manualBonus = (Number(setup.extraBonusPct) || 0) / 100;
+    const totalBonus = recBonus + manualBonus;
+    const bonusPct = (x) => pctText(x, Math.abs(x * 100 - Math.round(x * 100)) > 1e-6 ? 2 : 0);
     const mode = setup.admin.mode;
     const modeField = mode === 'net'
       ? field('Net yönetim gideri', 'admin.netPct', num(setup.admin.netPct, 2), { unit: '%', hint: 'Oyunun üretim hesaplayıcısında yazan yüzde.' })
@@ -547,9 +551,14 @@ export function mountUretim(root, { realm = 0 } = {}) {
         ${seg('phase', H.ECONOMY_PHASES.map((t, i) => [i, t]), setup.economyPhase, 'Ekonomi fazı')}</section>
 
       <section class="ur-card" aria-labelledby="h-rec"><h2 id="h-rec">Rekreasyon binaları</h2>
-        <p class="ur-sub">Seviye başına %1 üretim hızı (üretim ve araştırma binaları). Yönetim giderine girmez.</p>
+        <p class="ur-sub">Seviye başına %1 üretim hızı (üretim ve araştırma binaları). Her zaman hesaba katılır, yönetim giderine girmez.</p>
         ${REC.map(([k, t]) => `<div class="ur-row"><span style="min-width:78px;font-weight:600">${t}</span><div class="grow">${seg(`rec.${k}`, [[0, '0'], [1, '1'], [2, '2'], [3, '3']], setup.recreation[k] || 0, `${t} seviyesi`)}</div></div>`).join('')}
-        <div class="ur-hr"></div>${kv('Üretim hızı bonusu', pctText(recBonus, 0), 'c-price', true)}</section>
+        <div class="ur-hr"></div>${kv('Rekreasyon bonusu', pctText(recBonus, 0))}</section>
+
+      <section class="ur-card" aria-labelledby="h-hiz"><h2 id="h-hiz">Üretim hızı</h2>
+        ${field('Üretim hızı (elle)', 'extraBonusPct', num(setup.extraBonusPct, setup.extraBonusPct % 1 ? 2 : 0), { unit: '%', hint: 'Rekreasyon dışındaki üretim hızı bonusunuz. Rekreasyon bonusu buna her zaman eklenir.' })}
+        <div class="ur-hr"></div>${kv('Toplam üretim hızı', bonusPct(totalBonus), 'c-price', true)}
+        <p class="ur-note">Elle girdiğiniz değer ile rekreasyon bonusunun toplamıdır; buradan değiştirilemez.</p></section>
 
       <section class="ur-card" aria-labelledby="h-admin"><h2 id="h-admin">Yönetim gideri</h2>
         ${seg('adminMode', [['savings', 'Tasarruf %'], ['net', 'Net oran %'], ['executives', 'Ekipten']], mode, 'Yönetim gideri girişi')}
@@ -1084,6 +1093,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       if (f === 'admin.netPct') return commit({ ...setup, admin: { ...setup.admin, netPct: value } }, soft);
       if (f === 'academyLevel' || f === 'otherLevels') return commit({ ...setup, [f]: Math.floor(value) }, soft);
       if (f === 'otherWagesDay') return commit({ ...setup, otherWagesDay: value }, soft);
+      if (f === 'extraBonusPct') return commit({ ...setup, extraBonusPct: Math.min(99, value) }, soft);
       return;
     }
     if (!sheet || !t.dataset?.d) return;
