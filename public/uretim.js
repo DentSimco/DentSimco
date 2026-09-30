@@ -7,6 +7,7 @@ import * as H from './hesap.js';
 
 const STORE_KEY = (r) => `dentsimco.uretim.r${r}`;
 const TAB_KEY = 'dentsimco.uretim.tab';
+const PARK_KEY = 'dentsimco.uretim.parked';
 const PERIOD_KEY = 'dentsimco.uretim.period';
 const PERIODS = [['hour', 'Saatlik', 1 / 24], ['day', 'Günlük', 1], ['week', 'Haftalık', 7], ['month', 'Aylık', 30]];
 const TABS = [['kurulum', 'Kurulum'], ['binalar', 'Binalar'], ['alimsatim', 'Alım-Satım'], ['ozet', 'Özet']];
@@ -262,6 +263,27 @@ export function mountUretim(root, { realm = 0 } = {}) {
   const toastHost = root.querySelector('[data-toast]');
 
   const nameOf = (id) => data?.products[id]?.name || `#${id}`;
+  // Kalitesi olmayan ürünlerde (araştırma, Taşıma) kalite etiketi gösterilmez
+  const qChip = (product, q, kind = '') => (H.hasQuality(data?.products[product]) ? chip(`Q${q}`, kind) : '');
+
+  // "Olayları yönet" ile Kurulum'a giderken yarım kalan bina paneli (bu oturumda saklanır, Binalar'a dönünce yeniden açılır)
+  let parkedMem = null;
+  function parkSheet(state) { parkedMem = state; try { sessionStorage.setItem(PARK_KEY, JSON.stringify(state)); } catch { /* yok */ } }
+  function peekParked() {
+    let st = parkedMem;
+    if (!st) { try { st = JSON.parse(sessionStorage.getItem(PARK_KEY) || 'null'); } catch { st = null; } }
+    return st && st.realm === r && st.draft && typeof st.draft === 'object' ? st : null;
+  }
+  function clearParked() { parkedMem = null; try { sessionStorage.removeItem(PARK_KEY); } catch { /* yok */ } }
+  function resumeParked() {
+    const st = peekParked();
+    if (!st || !data || tab !== 'binalar' || sheet) return;
+    clearParked();
+    if (st.index != null && setup.buildings[st.index]?.id !== st.draft.id) return; // bina bu arada silinmiş ya da yer değiştirmiş
+    openSheet('building', st.draft, { index: st.index ?? null });
+    const panel = sheetHost.querySelector('.ur-panel');
+    if (panel && st.scroll) panel.scrollTop = st.scroll;
+  }
   const buildingName = (letter) => BUILDING_NAMES[letter] || `Bina ${letter}`;
   const now = () => Date.now();
 
@@ -302,6 +324,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       loadError = e?.message || String(e);
     }
     render();
+    resumeParked();
   }
 
   // ---- fiyatlar ----
@@ -381,7 +404,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       const uc = x.contractUnit == null ? null : x.contractUnit - x.unitCost;
       const col = (v) => (v == null ? '' : v >= 0 ? 'c-up' : 'c-down');
       return `<div class="ur-card" style="padding:12px">
-        <div class="ur-row" style="align-items:flex-start;gap:12px"><div class="grow"><div class="ur-row" style="gap:6px"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${chip(`Q${x.quality}`)}</div>
+        <div class="ur-row" style="align-items:flex-start;gap:12px"><div class="grow"><div class="ur-row" style="gap:6px"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${qChip(x.product, x.quality)}</div>
           <span class="ur-note">fazla üretim, satılır</span></div>
           <div style="text-align:right"><div style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums">${smart(x.surplusDay)}</div><span class="ur-note">adet/gün</span></div></div>
         <div class="ur-grid2">
@@ -400,7 +423,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         <div class="ur-row"><div class="grow"><div style="font-weight:600">Bu ürünü satma</div><p class="ur-note">Stokta tut, gelire yazma.</p></div>${sw('keep', false, `${nameOf(x.product)} satılmasın`, `data-v="${x.key}"`)}</div>
       </div>`;
     }).join('');
-    const kept = plan.kept.map((k) => `<div class="ur-line"><div class="grow"><span class="title">${esc(nameOf(k.product))}</span> ${chip(`Q${k.quality}`, 'muted')}<p class="ur-note">${smart(k.surplusDay)} adet/gün stokta kalır</p></div>
+    const kept = plan.kept.map((k) => `<div class="ur-line"><div class="grow"><span class="title">${esc(nameOf(k.product))}</span> ${qChip(k.product, k.quality, 'muted')}<p class="ur-note">${smart(k.surplusDay)} adet/gün stokta kalır</p></div>
       ${sw('keep', true, `${nameOf(k.product)} satılmasın`, `data-v="${k.key}"`)}</div>`).join('');
     const grossX = plan.sales.reduce((t, x) => t + (x.price == null ? 0 : x.surplusDay * x.price), 0);
     const grossC = plan.sales.reduce((t, x) => t + (x.contractPrice == null ? 0 : x.surplusDay * x.contractPrice), 0);
@@ -473,7 +496,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const products = plan.sales.map((x) => {
       const ux = x.exchangeUnit == null ? null : x.exchangeUnit - x.unitCost;
       const uc = x.contractUnit == null ? null : x.contractUnit - x.unitCost;
-      return `<div class="ur-card" style="padding:12px"><div class="ur-row" style="gap:6px;flex-wrap:wrap"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${chip(`Q${x.quality}`)}<span class="ur-note" style="margin-left:auto">${smart(x.surplusDay)} adet/gün</span></div>
+      return `<div class="ur-card" style="padding:12px"><div class="ur-row" style="gap:6px;flex-wrap:wrap"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${qChip(x.product, x.quality)}<span class="ur-note" style="margin-left:auto">${smart(x.surplusDay)} adet/gün</span></div>
         <div class="ur-tri head"><span></span><span>Borsa</span><span>Kontrat</span></div>
         ${tri('Birim maliyet', money(x.unitCost, 2), money(x.unitCost, 2))}${tri('Net birim gelir', money(x.exchangeUnit, 2), money(x.contractUnit, 2))}
         ${tri('Birim kâr', money(ux, 2, true), money(uc, 2, true), { strong: true, line: true, ca: cls(ux), cb: cls(uc) })}
@@ -519,8 +542,8 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const k = PERIODS.find(([key]) => key === period)[2];
     const A = accounts(plan);
     const m = (v) => money(v * k);
-    const L = [`DentSimco üretim özeti · Realm ${r} · ${PERIODS.find(([key]) => key === period)[1]} · ${H.ECONOMY_PHASES[setup.economyPhase]}`,
-      `Binalar: ${setup.buildings.map((b) => `${nameOf(b.product)} Q${b.quality} (${buildingName(b.type)} ${b.level})`).join(', ')}`, '',
+    const L = [`DentSimco üretim özeti · Realm ${r + 1} · ${PERIODS.find(([key]) => key === period)[1]} · ${H.ECONOMY_PHASES[setup.economyPhase]}`,
+      `Binalar: ${setup.buildings.map((b) => `${nameOf(b.product)}${H.hasQuality(data.products[b.product]) ? ` Q${b.quality}` : ''} (${buildingName(b.type)} ${b.level})`).join(', ')}`, '',
       `                      Borsa        Kontrat`,
       ...[['Brüt satış', A.grossX, A.grossC], ['Komisyon', -A.fee, 0], ['Taşıma', -A.trX, -A.trC], ['Net satış', A.netX, A.netC], ['Girdi alımları', -A.buy, -A.buy],
         ['Bina maaşları', -A.direct, -A.direct], ['Yönetim gideri', -A.admin, -A.admin], ['Brüt kâr', A.profitX, A.profitC], ['Yönetici maaşları', -A.exec, -A.exec],
@@ -543,7 +566,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         ? `<div class="ur-box">${kv('Ekip puanından tasarruf', `≈ %${H.managementSavingsPct(H.teamScores(setup.executives).coo)}`, 'c-price', true)}<p class="ur-note">Yöneticiler kartındaki aktif yöneticilerden hesaplanır. Yaklaşıktır (±1 puan).</p></div>`
         : field('Yönetici tasarrufu', 'admin.savingsPct', num(setup.admin.savingsPct, fin(setup.admin.savingsPct) && setup.admin.savingsPct % 1 ? 2 : 0), { unit: '%', hint: 'Oyunun yönetim sayfasında: tasarruf ÷ yönetim gideri (örneğin 118,53 ÷ 191,18 = %62).' });
     return `
-      <div class="ur-head"><div><h1>Realm ${r} kurulumu</h1><p class="ur-sub">Bu tarayıcıda saklanır.</p></div>
+      <div class="ur-head"><div><h1>Realm ${r + 1} kurulumu</h1><p class="ur-sub">Bu tarayıcıda saklanır.</p></div>
         <div class="ur-row"><button type="button" class="ur-btn" data-act="export">${icon('copy')}Kopyala</button><button type="button" class="ur-btn" data-act="import">Yapıştır</button></div></div>
 
       <section class="ur-card" aria-labelledby="h-faz"><h2 id="h-faz">Ekonomi fazı</h2>
@@ -581,7 +604,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
           ${sw('substitution', setup.substitution !== false, 'Kalite ikamesi')}</div>
         <div class="ur-hr"></div>
         <button type="button" class="ur-btn danger" data-act="reset">${icon('trash')}Bu kurulumu sıfırla</button>
-        <p class="ur-note">Realm ${r} kurulumunu bu tarayıcıdan siler. Önce Kopyala ile yedek alabilirsiniz.</p></section>`;
+        <p class="ur-note">Realm ${r + 1} kurulumunu bu tarayıcıdan siler. Önce Kopyala ile yedek alabilirsiniz.</p></section>`;
   }
 
   function cardExecutives(plan) {
@@ -637,6 +660,12 @@ export function mountUretim(root, { realm = 0 } = {}) {
     }).join('');
     return `<section class="ur-card" aria-labelledby="h-ev"><h2 id="h-ev">Oyun olayları</h2>
       <p class="ur-sub">Bir olayı kapatırsanız o ürünü üreten bütün binalarda hesaba katılmaz. Olaylar oyundan otomatik gelir.</p>
+      ${(() => {
+        const st = peekParked();
+        if (!st) return '';
+        const what = st.draft.product ? nameOf(st.draft.product) : st.draft.type ? buildingName(st.draft.type) : 'Bina';
+        return `<div class="ur-box"><div class="ur-row"><div class="grow"><div style="font-weight:600">Yarım kalan bina ayarı</div><p class="ur-note">${esc(what)} düzenlemesi kaldığınız yerden devam eder.</p></div><button type="button" class="ur-btn primary" data-act="resumeSheet">Binaya dön</button></div></div>`;
+      })()}
       ${list.length ? `<div>${rows}</div>` : '<p class="ur-note">Şu an etkin oyun olayı yok.</p>'}</section>`;
   }
 
@@ -669,7 +698,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const title = p ? esc(p.name) : 'Ürün seçilmedi';
     return `<article class="ur-card" aria-label="${title}, ${esc(buildingName(b.type))}, seviye ${b.level}">
       <div class="ur-row" style="gap:12px">
-        <div class="grow"><div class="ur-row" style="flex-wrap:wrap;gap:6px"><span style="font:600 19px var(--font-c)">${title}</span>${chip(`Q${b.quality}`)}</div>
+        <div class="grow"><div class="ur-row" style="flex-wrap:wrap;gap:6px"><span style="font:600 19px var(--font-c)">${title}</span>${qChip(b.product, b.quality)}</div>
           <span class="ur-note">${esc(buildingName(b.type))}</span></div>
         <div class="ur-level"><small>Seviye</small><b>${num(b.level)}</b></div></div>
       <div class="ur-hr"></div>
@@ -691,7 +720,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       const tag = surplus > 1e-6 * pool.producedDay
         ? chip(`Fazla ${smart(surplus)} satılır`, 'up')
         : chip('Tamamı kullanılır', 'muted');
-      return `<div class="ur-line" style="flex-wrap:wrap"><div class="grow"><div class="ur-row" style="gap:6px"><span class="title">${esc(nameOf(pool.product))}</span>${chip(`Q${pool.quality}`)}</div>
+      return `<div class="ur-line" style="flex-wrap:wrap"><div class="grow"><div class="ur-row" style="gap:6px"><span class="title">${esc(nameOf(pool.product))}</span>${qChip(pool.product, pool.quality)}</div>
         <span class="ur-note">Günlük ${smart(pool.producedDay)} üretilir${used ? `, ${smart(pool.usedDay)} planda kullanılır` : ''}</span></div>${tag}</div>`;
     }).join('');
     return `<section class="ur-card" aria-labelledby="h-sum"><h2 id="h-sum">Üretim özeti</h2>${lines}</section>`;
@@ -739,14 +768,31 @@ export function mountUretim(root, { realm = 0 } = {}) {
   }
   function renderSheet(first = false) {
     if (!sheet || !data) { sheetHost.innerHTML = ''; return; }
-    const focusKey = document.activeElement?.closest?.('.ur-panel') ? document.activeElement.getAttribute('data-d') || document.activeElement.getAttribute('data-act') : null;
+    // Panel yeniden çizilirken (+/− , kalite, robot...) kaydırma konumu ve odaklı düğme korunur; yoksa panel başa atlar
+    const oldPanel = first ? null : sheetHost.querySelector('.ur-panel');
+    const keepScroll = oldPanel ? oldPanel.scrollTop : 0;
+    const active = document.activeElement?.closest?.('.ur-panel') ? document.activeElement : null;
+    const focusSel = (() => {
+      if (!active) return null;
+      const dd = active.getAttribute('data-d');
+      const aa = active.getAttribute('data-act');
+      const vv = active.getAttribute('data-v');
+      const safe = (x) => String(x).replace(/["\\]/g, '');
+      if (dd) return `[data-d="${safe(dd)}"]`;
+      if (aa) return vv != null ? `[data-act="${safe(aa)}"][data-v="${safe(vv)}"]` : `[data-act="${safe(aa)}"]`;
+      return null;
+    })();
     const html = sheet.kind === 'building' ? sheetBuilding() : sheet.kind === 'exec' ? sheetExec() : sheet.kind === 'api' ? sheetApi()
       : sheet.kind === 'export' ? sheetExport() : sheet.kind === 'import' ? sheetImport() : sheet.kind === 'reset' ? sheetReset()
         : sheet.kind === 'bulk' ? sheetBulk() : '';
     sheetHost.innerHTML = `<div class="ur-sheet ur" style="padding:0;max-width:none;margin:0" data-act="sheetBackdrop"><div class="ur-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">${html}</div></div>`;
     document.body.style.overflow = 'hidden';
     if (first) sheetHost.querySelector('.ur-panel select, .ur-panel input, .ur-panel textarea, .ur-panel button')?.focus();
-    else if (focusKey) sheetHost.querySelector(`[data-d="${focusKey}"], [data-act="${focusKey}"]`)?.focus();
+    else {
+      if (focusSel) sheetHost.querySelector(focusSel)?.focus({ preventScroll: true });
+      const panel = sheetHost.querySelector('.ur-panel');
+      if (panel && keepScroll) panel.scrollTop = keepScroll;
+    }
   }
   const panelHead = (title, sub = '') => `<div class="ur-panel-head"><div class="grow" style="flex:1"><h2 id="sheet-title">${esc(title)}</h2>${sub ? `<p class="ur-sub">${esc(sub)}</p>` : ''}</div>
     <button type="button" class="ur-btn" data-act="sheetClose" aria-label="Kapat">${icon('close')}</button></div>`;
@@ -783,7 +829,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const admin = H.adminInfo(ds, data);
     const row = H.buildingRate(d, ds, data, admin, now());
     if (!row.ok) return `<div class="ur-msg err">${esc(row.errors.join('. '))}</div>`;
-    const minQ = H.minInputQuality(d.quality);
+    const minQ = H.minInputQuality(H.hasQuality(p) ? d.quality : 0);
     return `<div class="ur-box"><span class="ur-note" style="font-weight:600">Bu bina için</span>
       ${kv('Saatlik üretim', perHour(row.hourly), 'c-price', true)}${kv('Günlük üretim', smart(row.daily))}
       ${kv('Maaş/saat (yönetim dahil)', money(row.wageHour * (1 + admin.net)))}
@@ -800,7 +846,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     return `${panelHead(sheet.index != null ? 'Bina düzenle' : 'Bina ekle', d.type ? buildingName(d.type) : '')}
       <label class="ur-field"><span>Bina türü</span><select data-d="type">${typeOptions()}</select></label>
       ${d.type ? `<label class="ur-field"><span>Ürün</span><select data-d="product">${productOptions()}</select></label>` : ''}
-      ${p ? `<div class="ur-field"><span>Ürün kalitesi</span><div class="ur-q" role="group" aria-label="Ürün kalitesi">${H.allowedQualities(0).map((q) => `<button type="button" data-act="dq" data-v="${q}" aria-pressed="${d.quality === q}">Q${q}</button>`).join('')}</div></div>
+      ${p ? `${H.hasQuality(p) ? `<div class="ur-field"><span>Ürün kalitesi</span><div class="ur-q" role="group" aria-label="Ürün kalitesi">${H.allowedQualities(0).map((q) => `<button type="button" data-act="dq" data-v="${q}" aria-pressed="${d.quality === q}">Q${q}</button>`).join('')}</div></div>` : ''}
         <div class="ur-field"><span>Bina seviyesi</span><div class="ur-stepper"><button type="button" data-act="dLevel" data-v="-1" aria-label="Seviyeyi azalt">${icon('minus')}</button>
           <input type="text" inputmode="numeric" data-d="level" value="${d.level}" aria-label="Bina seviyesi"><button type="button" data-act="dLevel" data-v="1" aria-label="Seviyeyi artır">${icon('plus')}</button></div></div>
         ${cat === 'production' ? `<div class="ur-field"><span>Robot</span>${seg('dRobot', [['0', 'Yok'], ['1', 'Var']], d.robots ? '1' : '0', 'Robot')}<p class="ur-note">Robot taban maaşı %3 düşürür, üretimi değiştirmez.</p></div>` : ''}
@@ -858,13 +904,13 @@ export function mountUretim(root, { realm = 0 } = {}) {
         ${parsed ? '<button type="button" class="ur-btn primary grow" data-act="apiApply">Listeyi değiştir</button>' : '<button type="button" class="ur-btn primary grow" data-act="apiRead">Oku</button>'}</div>`;
   }
   function sheetExport() {
-    return `${panelHead('Kurulumu kopyala', `Realm ${r}`)}
+    return `${panelHead('Kurulumu kopyala', `Realm ${r + 1}`)}
       <p class="ur-sub">Bu metni başka bir cihazda Kurulum › Yapıştır ile yükleyin.</p>
       <textarea readonly data-d="exportText" aria-label="Kurulum metni">${esc(JSON.stringify(setup))}</textarea>
       <div class="ur-panel-foot"><button type="button" class="ur-btn grow" data-act="sheetClose">Kapat</button><button type="button" class="ur-btn primary grow" data-act="copyExport">${icon('copy')}Panoya kopyala</button></div>`;
   }
   function sheetImport() {
-    return `${panelHead('Kurulumu yapıştır', `Realm ${r}`)}
+    return `${panelHead('Kurulumu yapıştır', `Realm ${r + 1}`)}
       <p class="ur-sub">Başka bir cihazda Kopyala ile aldığınız metni yapıştırın. Bu realm'in mevcut kurulumunun yerine geçer.</p>
       <textarea data-d="importText" spellcheck="false" autocapitalize="off" aria-label="Kurulum metni">${esc(sheet.text || '')}</textarea>
       ${sheet.error ? `<div class="ur-msg err" role="alert">${esc(sheet.error)}</div>` : ''}
@@ -873,7 +919,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
   function sheetBulk() {
     const sel = sheet.sel;
     const list = setup.buildings.map((b, i) => `<label class="ur-check"><input type="checkbox" data-bsel="${i}" ${sel.has(i) ? 'checked' : ''}>
-      <span class="grow" style="flex:1;min-width:0"><span style="font-weight:600">${esc(nameOf(b.product))}</span> <span class="ur-note">Q${b.quality} · ${esc(buildingName(b.type))}</span></span>
+      <span class="grow" style="flex:1;min-width:0"><span style="font-weight:600">${esc(nameOf(b.product))}</span> <span class="ur-note">${H.hasQuality(data.products[b.product]) ? `Q${b.quality} · ` : ''}${esc(buildingName(b.type))}</span></span>
       <span style="font:600 18px var(--font-c)">${num(b.level)}</span></label>`).join('');
     const n = sel.size;
     const dis = n ? '' : 'disabled';
@@ -889,7 +935,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       <div class="ur-panel-foot"><button type="button" class="ur-btn primary grow" data-act="sheetClose">Bitti</button></div>`;
   }
   function sheetReset() {
-    return `${panelHead('Kurulum sıfırlansın mı?', `Realm ${r}`)}
+    return `${panelHead('Kurulum sıfırlansın mı?', `Realm ${r + 1}`)}
       <p class="ur-sub">${num(setup.buildings.length)} bina, ${num(setup.executives.length)} yönetici ve tüm ayarlar bu tarayıcıdan silinir. Geri alınamaz.</p>
       <div class="ur-panel-foot"><button type="button" class="ur-btn grow" data-act="sheetClose">Vazgeç</button><button type="button" class="ur-btn primary grow" data-act="resetApply" style="background:var(--down);border-color:var(--down)">Sıfırla</button></div>`;
   }
@@ -940,11 +986,13 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (act === 'export') return openSheet('export', null);
     if (act === 'import') return openSheet('import', null, { text: '' });
     if (act === 'reset') return openSheet('reset', null);
+    if (act === 'resumeSheet') { location.hash = '#uretim/binalar'; return; }
     if (act === 'bNew') {
+      clearParked();
       const last = setup.buildings[setup.buildings.length - 1];
       return openSheet('building', { id: uid('b'), type: last?.type || '', product: null, quality: 0, level: 1, robots: false, efficiency: 100 });
     }
-    if (act === 'bEdit') { const i = Number(v); return openSheet('building', { ...setup.buildings[i] }, { index: i }); }
+    if (act === 'bEdit') { clearParked(); const i = Number(v); return openSheet('building', { ...setup.buildings[i] }, { index: i }); }
     if (act === 'bCopy') {
       const i = Number(v);
       const list = [...setup.buildings];
@@ -984,7 +1032,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         return apply((b) => ({ ...b, level: Math.floor(n) }));
       }
       if (act === 'bulkRobot') return apply((b) => (H.buildingCategory(data, b.type) === 'production' ? { ...b, robots: v === '1' } : b));
-      if (act === 'bulkQuality') { const q = Number(sheetHost.querySelector('[data-d="bulkQ"]')?.value || 0); return apply((b) => ({ ...b, quality: q })); }
+      if (act === 'bulkQuality') { const q = Number(sheetHost.querySelector('[data-d="bulkQ"]')?.value || 0); return apply((b) => (H.hasQuality(data.products[b.product]) ? { ...b, quality: q } : b)); }
       if (act === 'bulkDel') {
         const count = sel.size;
         sheet.sel = new Set();
@@ -998,9 +1046,13 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (act === 'dq') { d.quality = Number(v); return renderSheet(); }
     if (act === 'dLevel') { d.level = Math.max(1, (Number(d.level) || 1) + Number(v)); return renderSheet(); }
     if (act === 'dRobot') { d.robots = v === '1'; return renderSheet(); }
-    if (act === 'gotoEvents') { closeSheet(); location.hash = '#uretim/kurulum'; setTimeout(() => document.getElementById('h-ev')?.scrollIntoView({ block: 'start' }), 50); return; }
+    if (act === 'gotoEvents') {
+      parkSheet({ realm: r, draft: structuredClone(sheet.draft), index: sheet.index ?? null, scroll: sheetHost.querySelector('.ur-panel')?.scrollTop || 0 });
+      closeSheet(); location.hash = '#uretim/kurulum'; setTimeout(() => document.getElementById('h-ev')?.scrollIntoView({ block: 'start' }), 50); return;
+    }
     if (act === 'bSave') {
       if (!data.products[d.product]) return;
+      if (!H.hasQuality(data.products[d.product])) d.quality = 0;
       const list = [...setup.buildings];
       if (sheet.index != null) list[sheet.index] = d; else list.push(d);
       const isNew = sheet.index == null;
@@ -1051,6 +1103,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         const obj = JSON.parse(sheet.text);
         if (!obj || typeof obj !== 'object' || !Array.isArray(obj.buildings)) throw new Error('Bu bir DentSimco kurulum metni değil.');
         closeSheet();
+        clearParked();
         commit(obj);
         return toast('Kurulum yüklendi.');
       } catch (e) {
@@ -1058,7 +1111,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         return renderSheet();
       }
     }
-    if (act === 'resetApply') { closeSheet(); try { localStorage.removeItem(STORE_KEY(r)); } catch { /* yok */ } setup = defaultSetup(); render(); return toast('Kurulum sıfırlandı.'); }
+    if (act === 'resetApply') { closeSheet(); clearParked(); try { localStorage.removeItem(STORE_KEY(r)); } catch { /* yok */ } setup = defaultSetup(); render(); return toast('Kurulum sıfırlandı.'); }
   }
 
   function onChange(ev) {
@@ -1100,7 +1153,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const d = sheet.draft;
     const key = t.dataset.d;
     if (key === 'type') { d.type = t.value; d.product = null; d.robots = false; d.efficiency = 100; return renderSheet(); }
-    if (key === 'product') { d.product = Number(t.value); return renderSheet(); }
+    if (key === 'product') { d.product = Number(t.value); if (!H.hasQuality(data.products[d.product])) d.quality = 0; return renderSheet(); }
     if (key === 'apiText' || key === 'importText') { sheet.text = t.value; return; }
     // Yazı kutuları: taslak ve sonuç kutusu güncellenir, panel yeniden çizilmez (dokunulan düğme kaybolmasın)
     if (updateDraftInput(t)) refreshResult();
@@ -1142,6 +1195,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     closeSheet();
     render();
     window.scrollTo(0, 0);
+    if (tab === 'binalar') resumeParked();
   }
 
   document.addEventListener('pointerdown', onPointerDown, true);
@@ -1159,6 +1213,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
   return {
     setRealm(next) {
       if (next === r) return;
+      clearParked();
       closeSheet();
       r = next;
       setup = loadSetup(r);
