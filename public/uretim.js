@@ -1,12 +1,14 @@
 // DentSimco — Üretim hesaplayıcı (arayüz)
 // Hesapların hepsi hesap.js'te; burada yalnız ekranlar, veri yükleme ve tarayıcıda kayıt var.
-// Aşama 2: Kurulum ve Binalar çalışıyor. Alım-Satım ve Özet Aşama 4'te gelecek.
+// Kurulum, Binalar, Alım-Satım ve Özet (ön muhasebe). Fiyatlar botun 15 dakikada bir yazdığı live/r{realm} belgesinden.
 
 import { readDocs, PATHS, dataField } from './veri.js';
 import * as H from './hesap.js';
 
 const STORE_KEY = (r) => `dentsimco.uretim.r${r}`;
 const TAB_KEY = 'dentsimco.uretim.tab';
+const PERIOD_KEY = 'dentsimco.uretim.period';
+const PERIODS = [['hour', 'Saatlik', 1 / 24], ['day', 'Günlük', 1], ['week', 'Haftalık', 7], ['month', 'Aylık', 30]];
 const TABS = [['kurulum', 'Kurulum'], ['binalar', 'Binalar'], ['alimsatim', 'Alım-Satım'], ['ozet', 'Özet']];
 
 // Bina adları veride yok; oyunun Türkçe arayüzüne göre
@@ -26,7 +28,7 @@ const SKILL_LABELS = [['coo', 'Yönetim'], ['cfo', 'Muhasebe'], ['cmo', 'İleti�
 const REC = [['park', 'Park'], ['temple', 'Tapınak'], ['lake', 'Göl']];
 
 // ---- biçimlendirme ----
-const NF = [0, 1, 2, 3].map((d) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: d, maximumFractionDigits: d }));
+const NF = [0, 1, 2, 3, 4].map((d) => new Intl.NumberFormat('tr-TR', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const fin = (x) => x != null && Number.isFinite(x);
 const num = (x, d = 0) => (fin(x) ? NF[d].format(x) : '—');
 const smart = (x) => (!fin(x) ? '—' : Math.abs(x) >= 100 ? NF[0].format(x) : Math.abs(x) >= 1 ? NF[2].format(x) : NF[3].format(x));
@@ -36,7 +38,7 @@ const money = (x, d = 0, sign = false) => {
   const s = `$${NF[d].format(Math.abs(x))}`;
   return x < 0 ? `−${s}` : sign && x > 0 ? `+${s}` : s;
 };
-const pctText = (fraction, d = 2) => (fin(fraction) ? `%${NF[d].format(fraction * 100)}` : '—');
+const pctText = (fraction, d = 2) => (fin(fraction) ? `${fraction < 0 ? '−' : ''}%${NF[d].format(Math.abs(fraction * 100))}` : '—');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const whenFmt = new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -58,6 +60,7 @@ function defaultSetup() {
     academyLevel: 0, otherLevels: 0, otherWagesDay: 0,
     admin: { mode: 'savings', savingsPct: 0, netPct: 0 }, executives: [], events: {},
     substitution: true, buyPolicy: 'cheapest',
+    prices: {}, contractPrices: {}, keep: {}, buyQuality: {}, transportPrice: null,
   };
 }
 function sanitizeSetup(raw) {
@@ -67,6 +70,9 @@ function sanitizeSetup(raw) {
   s.recreation = { ...base.recreation, ...(raw.recreation || {}) };
   s.admin = { ...base.admin, ...(raw.admin || {}) };
   s.events = { ...(raw.events || {}) };
+  for (const k of ['prices', 'contractPrices', 'keep', 'buyQuality']) s[k] = raw[k] && typeof raw[k] === 'object' ? { ...raw[k] } : {};
+  s.transportPrice = Number.isFinite(Number(raw.transportPrice)) && raw.transportPrice !== null && raw.transportPrice !== '' ? Number(raw.transportPrice) : null;
+  if (!['cheapest', 'exact'].includes(s.buyPolicy)) s.buyPolicy = 'cheapest';
   s.buildings = (Array.isArray(raw.buildings) ? raw.buildings : []).filter((b) => b && typeof b === 'object')
     .map((b) => ({ id: b.id || uid('b'), type: b.type, product: b.product != null ? Number(b.product) : null, level: Math.max(1, Math.floor(Number(b.level) || 1)),
       quality: H.clampQuality(b.quality), robots: !!b.robots, efficiency: Number.isFinite(Number(b.efficiency)) ? Number(b.efficiency) : 100 }));
@@ -84,6 +90,10 @@ function saveSetup(r, setup) {
   try { localStorage.setItem(STORE_KEY(r), JSON.stringify(setup)); return true; } catch { return false; }
 }
 
+async function loadLive(r, options) {
+  const docs = await readDocs([PATHS.live(r)], options);
+  return dataField(docs.get(PATHS.live(r))) || null;
+}
 async function loadData(r) {
   const P = { products: PATHS.meta(`products_r${r}`), buildings: PATHS.meta('buildings'), core: PATHS.meta('core'), modifiers: PATHS.meta(`modifiers_r${r}`) };
   const docs = await readDocs(Object.values(P));
@@ -180,6 +190,17 @@ const CSS = `
 .ur-stepper svg { width: 22px; height: 22px; }
 .ur-msg { border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.4; background: var(--raise); border: 1px solid var(--line-2); }
 .ur-msg.err { background: #2d0f1a; border-color: #5e2032; color: #ffc2cf; }
+.ur-tri { display: grid; grid-template-columns: minmax(0, 1fr) minmax(84px, auto) minmax(84px, auto); gap: 8px; align-items: center; min-height: 30px; padding: 2px 0; }
+.ur-tri > span { font-size: 15px; } .ur-tri > span:not(:first-child) { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ur-tri.head { min-height: 22px; border-bottom: 1px solid var(--line-2); padding-bottom: 4px; } .ur-tri.head > span { color: var(--accent); font-size: 13px; font-weight: 600; }
+.ur-tri.indent > span:first-child { padding-left: 12px; } .ur-tri.muted > span { color: var(--muted); } .ur-tri.strong > span { font-weight: 600; font-size: 16px; }
+.ur-tri.line { border-top: 1px solid var(--line-2); margin-top: 2px; padding-top: 6px; }
+@media (max-width: 480px) { .ur-tri { gap: 6px; } .ur-tri > span { font-size: 14px; } .ur-tri.strong > span { font-size: 15px; } }
+.ur-grp { color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding-top: 8px; }
+.ur-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; background: var(--raise); } .ur-bar > span { height: 100%; }
+.ur-dot { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 8px; vertical-align: -1px; }
+.ur-check { display: flex; align-items: center; gap: 10px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.ur-check input { width: 24px; height: 24px; accent-color: var(--accent); flex: none; }
 .ur-toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 60; background: var(--raise-2);
   border: 1px solid var(--line-2); border-radius: 12px; padding: 12px 16px; font-size: 15px; max-width: calc(100vw - 32px); box-shadow: 0 8px 30px rgba(0,0,0,.5); }
 .ur-sheet { position: fixed; inset: 0; z-index: 50; background: rgba(1, 3, 8, 0.72); display: flex; align-items: flex-end; justify-content: center; }
@@ -213,6 +234,12 @@ export function mountUretim(root, { realm = 0 } = {}) {
   let r = realm;
   let setup = loadSetup(r);
   let data = null;
+  let live = null;
+  let liveError = null;
+  let refreshing = false;
+  let execScope = 'company';
+  let period = 'day';
+  try { period = PERIODS.some(([k]) => k === localStorage.getItem(PERIOD_KEY)) ? localStorage.getItem(PERIOD_KEY) : 'day'; } catch { /* gizli sekme */ }
   let loadError = null;
   let loadToken = 0;
   let destroyed = false;
@@ -265,9 +292,10 @@ export function mountUretim(root, { realm = 0 } = {}) {
     loadError = null;
     render();
     try {
-      const d = await loadData(r);
+      const [d, l] = await Promise.all([loadData(r), loadLive(r).catch((e) => { liveError = e?.message || String(e); return null; })]);
       if (destroyed || my !== loadToken) return;
       data = d;
+      live = l;
     } catch (e) {
       if (destroyed || my !== loadToken) return;
       loadError = e?.message || String(e);
@@ -275,8 +303,25 @@ export function mountUretim(root, { realm = 0 } = {}) {
     render();
   }
 
+  // ---- fiyatlar ----
+  const marketPrice = (id, q) => live?.items?.[id]?.[1]?.[q]?.[0] ?? null;
+  const priceTime = (id) => live?.items?.[id]?.[0] ?? null;
+  const ago = (t) => {
+    if (!t) return '';
+    const m = Math.max(0, Math.round((now() - t) / 60000));
+    return m < 1 ? 'az önce' : m < 60 ? `${m} dk önce` : m < 1440 ? `${Math.round(m / 60)} sa önce` : `${Math.round(m / 1440)} gün önce`;
+  };
+  async function refreshPrices() {
+    if (refreshing) return;
+    refreshing = true;
+    render();
+    try { live = await loadLive(r, { refresh: true }); liveError = null; toast('Fiyatlar yenilendi.'); } catch (e) { liveError = e?.message || String(e); }
+    refreshing = false;
+    render();
+  }
+
   // ---- hesap ----
-  const evaluate = (s = setup) => H.evaluatePlan(s, data, null, { now: now() });
+  const evaluate = (s = setup) => H.evaluatePlan(s, data, marketPrice, { now: now() });
 
   // ---- ekran ----
   function render() {
@@ -290,8 +335,13 @@ export function mountUretim(root, { realm = 0 } = {}) {
     } else if (!data) {
       body = '<p class="ur-sub" aria-busy="true">Ürün ve bina verileri yükleniyor…</p>';
     } else {
-      const plan = evaluate();
-      body = tab === 'kurulum' ? viewKurulum(plan) : tab === 'binalar' ? viewBinalar(plan) : viewSoon(tab);
+      try {
+        const plan = evaluate();
+        body = tab === 'kurulum' ? viewKurulum(plan) : tab === 'binalar' ? viewBinalar(plan) : tab === 'alimsatim' ? viewAlimSatim(plan) : viewOzet(plan);
+      } catch (e) {
+        console.error(e);
+        body = `<div class="ur-msg err" role="alert">Bu ekran gösterilemedi: ${esc(e?.message || e)}. Kurulum'u Kopyala ile yedekleyip sayfayı yenileyin; sürerse bize bildirin.</div>`;
+      }
     }
     const scroll = window.scrollY;
     view.innerHTML = tabs + body;
@@ -299,12 +349,182 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (sheet) renderSheet();
   }
 
-  function viewSoon(which) {
-    const text = which === 'alimsatim'
-      ? 'Alışlar, satışlar, taşıma ve fiyatlar burada olacak. Fiyatlar borsadan gelecek, her biri elle değiştirilebilecek.'
-      : 'Günlük gelir tablosu, borsa ve kontrat kârı, maliyet dağılımı ve yöneticilerin getirisi burada olacak.';
-    return `<div class="ur-card ur-empty"><h2>${which === 'alimsatim' ? 'Alım-Satım' : 'Özet'} yakında</h2><p class="ur-sub">${text}</p>
-      <p class="ur-note">Şimdilik Kurulum ve Binalar çalışıyor.</p></div>`;
+  // ---- ALIM-SATIM ----
+  const priceSourceChip = (source, id) => (source === 'manual' ? chip('Elle girildi', 'muted') : source === 'market' ? chip(`Borsa · ${ago(priceTime(id))}`) : chip('Fiyat yok', 'down'));
+  function viewAlimSatim(plan) {
+    const tp = plan.transportPrice;
+    const tManual = setup.transportPrice != null;
+    const liveInfo = live ? `Fiyatlar ${ago(live.t)} güncellendi.` : liveError ? 'Borsa fiyatları okunamadı.' : 'Borsa fiyatı yok.';
+    const buys = plan.purchases.slice().sort((a, b) => b.costDay - a.costDay || nameOf(a.product).localeCompare(nameOf(b.product), 'tr'));
+    const sells = plan.sales.slice().sort((a, b) => (b.revenueExchangeDay || 0) - (a.revenueExchangeDay || 0));
+    const buyCards = buys.map((p) => {
+      const forced = setup.buyQuality?.[p.product];
+      const opts = H.allowedQualities(p.minQuality).map((q) => {
+        const mp = marketPrice(p.product, q);
+        return `<option value="${q}" ${forced != null && Number(forced) === q ? 'selected' : ''}>Q${q} · ${mp != null ? money(mp, mp < 10 ? 3 : 2) : 'fiyat yok'}</option>`;
+      }).join('');
+      const moved = p.quality !== p.minQuality;
+      return `<div class="ur-card" style="padding:12px">
+        <div class="ur-row" style="align-items:flex-start;gap:12px"><div class="grow"><div class="ur-row" style="gap:6px;flex-wrap:wrap"><span style="font-size:18px;font-weight:600">${esc(nameOf(p.product))}</span>${chip(moved ? `Q${p.minQuality}+ → Q${p.quality}` : `Q${p.minQuality}+`)}</div>
+          <span class="ur-note">${smart(p.qtyDay)} adet/gün</span></div>
+          <div style="text-align:right"><div class="c-down" style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums">${p.price == null ? '—' : money(-p.costDay)}</div><span class="ur-note">günlük</span></div></div>
+        <div class="ur-grid2">
+          <label class="ur-field"><span>Kalite</span><select data-bq="${p.product}"><option value="" ${forced == null ? 'selected' : ''}>${setup.buyPolicy === 'exact' ? 'Tam alt kalite' : 'Otomatik (en ucuz)'}</option>${opts}</select></label>
+          <label class="ur-field"><span>Birim fiyat (Q${p.quality})</span><div class="ur-input"><i>$</i><input type="text" inputmode="decimal" data-p="price:${p.product}:${p.quality}" value="${p.price == null ? '' : esc(num(p.price, p.price < 10 ? 3 : 2))}" placeholder="fiyat girin"></div></label></div>
+        <div class="ur-row" style="flex-wrap:wrap">${priceSourceChip(p.priceSource, p.product)}${p.priceSource === 'manual' ? `<button type="button" class="ur-btn" data-act="priceReset" data-v="${p.product}:${p.quality}" style="min-height:36px">Borsa fiyatına dön</button>` : ''}</div>
+      </div>`;
+    }).join('');
+    const sellCards = sells.map((x) => {
+      const cManual = setup.contractPrices?.[x.key] != null;
+      const ux = x.exchangeUnit == null ? null : x.exchangeUnit - x.unitCost;
+      const uc = x.contractUnit == null ? null : x.contractUnit - x.unitCost;
+      const col = (v) => (v == null ? '' : v >= 0 ? 'c-up' : 'c-down');
+      return `<div class="ur-card" style="padding:12px">
+        <div class="ur-row" style="align-items:flex-start;gap:12px"><div class="grow"><div class="ur-row" style="gap:6px"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${chip(`Q${x.quality}`)}</div>
+          <span class="ur-note">fazla üretim, satılır</span></div>
+          <div style="text-align:right"><div style="font-size:18px;font-weight:600;font-variant-numeric:tabular-nums">${smart(x.surplusDay)}</div><span class="ur-note">adet/gün</span></div></div>
+        <div class="ur-grid2">
+          <div class="ur-box" style="gap:6px"><span style="color:var(--accent);font-weight:600;font-size:14px">Borsa</span>
+            <div class="ur-input"><i>$</i><input type="text" inputmode="decimal" data-p="price:${x.product}:${x.quality}" value="${x.price == null ? '' : esc(num(x.price, x.price < 10 ? 3 : 2))}" placeholder="fiyat" aria-label="Borsa satış fiyatı"></div>
+            ${priceSourceChip(x.priceSource, x.product)}
+            <span class="ur-note">Net birim</span><span style="font-weight:600;font-variant-numeric:tabular-nums">${money(x.exchangeUnit, 2)}</span></div>
+          <div class="ur-box" style="gap:6px"><span style="color:var(--accent);font-weight:600;font-size:14px">Kontrat</span>
+            <div class="ur-input"><i>$</i><input type="text" inputmode="decimal" data-p="contract:${x.product}:${x.quality}" value="${x.contractPrice == null ? '' : esc(num(x.contractPrice, x.contractPrice < 10 ? 3 : 2))}" placeholder="fiyat" aria-label="Kontrat fiyatı"></div>
+            ${cManual ? chip('Elle girildi', 'muted') : chip('Borsa fiyatıyla aynı')}
+            <span class="ur-note">Net birim</span><span style="font-weight:600;font-variant-numeric:tabular-nums">${money(x.contractUnit, 2)}</span></div></div>
+        ${kv('Birim maliyet', money(x.unitCost, 2))}
+        <div class="ur-kv"><span>Birim kâr · Borsa / Kontrat</span><span><b class="${col(ux)}">${money(ux, 2, true)}</b> <span class="c-muted">/</span> <b class="${col(uc)}">${money(uc, 2, true)}</b></span></div>
+        ${cManual ? `<button type="button" class="ur-btn" data-act="contractReset" data-v="${x.key}" style="min-height:36px;align-self:flex-start">Kontratı borsa fiyatına eşitle</button>` : ''}
+        <div class="ur-hr"></div>
+        <div class="ur-row"><div class="grow"><div style="font-weight:600">Bu ürünü satma</div><p class="ur-note">Stokta tut, gelire yazma.</p></div>${sw('keep', false, `${nameOf(x.product)} satılmasın`, `data-v="${x.key}"`)}</div>
+      </div>`;
+    }).join('');
+    const kept = plan.kept.map((k) => `<div class="ur-line"><div class="grow"><span class="title">${esc(nameOf(k.product))}</span> ${chip(`Q${k.quality}`, 'muted')}<p class="ur-note">${smart(k.surplusDay)} adet/gün stokta kalır</p></div>
+      ${sw('keep', true, `${nameOf(k.product)} satılmasın`, `data-v="${k.key}"`)}</div>`).join('');
+    const grossX = plan.sales.reduce((t, x) => t + (x.price == null ? 0 : x.surplusDay * x.price), 0);
+    const grossC = plan.sales.reduce((t, x) => t + (x.contractPrice == null ? 0 : x.surplusDay * x.contractPrice), 0);
+    return `
+      <div class="ur-head"><div><h1>Alım ve satış</h1><p class="ur-sub">${liveInfo} Her fiyatı elle değiştirebilirsiniz.</p></div>
+        <button type="button" class="ur-btn" data-act="refreshPrices" ${refreshing ? 'disabled' : ''}>${refreshing ? 'Yenileniyor…' : 'Fiyatları yenile'}</button></div>
+      <section class="ur-card" aria-labelledby="h-tr"><h2 id="h-tr">Taşıma</h2>
+        <p class="ur-sub">Borsada satarken satıcı öder; kontratta yarısı. Borsadaki Taşıma ürününün fiyatı.</p>
+        <div class="ur-row"><div class="grow"><div class="ur-input"><i>$</i><input type="text" inputmode="decimal" data-p="transport" value="${tp == null ? '' : esc(num(tp, 4))}" placeholder="fiyat girin" aria-label="Taşıma fiyatı"></div></div>
+          ${tManual ? '<button type="button" class="ur-btn" data-act="transportReset">Borsa fiyatına dön</button>' : ''}</div>
+        <div>${tManual ? chip('Elle girildi', 'muted') : tp != null ? chip(`Borsa · ${ago(priceTime(H.TRANSPORT_ID))}`) : chip('Fiyat yok', 'down')}</div></section>
+      <section style="display:flex;flex-direction:column;gap:10px" aria-labelledby="h-buy">
+        <div class="ur-head"><h2 id="h-buy">Alışlar</h2>${chip(`${money(plan.totals.purchasesDay)}/gün`, 'muted')}</div>
+        <p class="ur-sub">Kendi üretiminizin karşılamadığı girdiler borsadan alınır.</p>
+        <div class="ur-field"><span>Kalite seçimi</span>${seg('buyPolicy', [['cheapest', 'İzinli kalitelerin en ucuzu'], ['exact', 'Tam alt kalite']], setup.buyPolicy, 'Eksik girdinin kalitesi')}</div>
+        ${buys.length ? buyCards : '<div class="ur-card"><p class="ur-note">Alınacak girdi yok; plan kendi girdisini üretiyor.</p></div>'}</section>
+      <section style="display:flex;flex-direction:column;gap:10px" aria-labelledby="h-sell">
+        <div class="ur-head"><h2 id="h-sell">Satışlar</h2>${chip(`${money(grossX)}/gün`, 'muted')}</div>
+        <p class="ur-sub">Kendi ihtiyacınızdan fazla üretim satılır. Borsa ve kontrat fiyatı ayrı girilir; kontratta komisyon yok, taşıma yarı.</p>
+        ${sells.length ? sellCards : '<div class="ur-card"><p class="ur-note">Satılacak fazla üretim yok.</p></div>'}
+        ${plan.kept.length ? `<section class="ur-card"><h2>Satılmayanlar</h2>${kept}</section>` : ''}
+        ${sells.length ? `<div class="ur-box">${kv('Toplam brüt satış · Borsa', money(grossX))}${kv('Toplam brüt satış · Kontrat', money(grossC))}</div>` : ''}</section>
+      <a class="ur-btn primary" href="#uretim/ozet" style="text-decoration:none">Özet'e git</a>`;
+  }
+
+  // ---- ÖZET (ön muhasebe) ----
+  function accounts(plan) {
+    const t = plan.totals;
+    const S = plan.sales;
+    const tp = plan.transportPrice || 0;
+    const grossX = S.reduce((a, x) => a + (x.price == null ? 0 : x.surplusDay * x.price), 0);
+    const grossC = S.reduce((a, x) => a + (x.contractPrice == null ? 0 : x.surplusDay * x.contractPrice), 0);
+    const fee = S.reduce((a, x) => a + (x.price == null ? 0 : x.surplusDay * x.price * H.MARKET_FEE), 0);
+    const trX = S.reduce((a, x) => a + (x.price == null ? 0 : x.surplusDay * x.transportUnits * tp), 0);
+    const trC = S.reduce((a, x) => a + (x.contractPrice == null ? 0 : x.surplusDay * x.transportUnits * tp * H.CONTRACT_TRANSPORT_SHARE), 0);
+    return { grossX, grossC, fee, trX, trC, netX: t.revenueExchangeDay, netC: t.revenueContractDay, buy: t.purchasesDay, direct: t.wageBaseDay,
+      admin: t.wagesDayNet - t.wageBaseDay, cost: t.costDay, profitX: t.profitExchangeDay, profitC: t.profitContractDay, exec: t.executiveSalariesDay,
+      cashX: t.netCashExchangeDay, cashC: t.netCashContractDay, saved: t.executiveSavingsDay };
+  }
+  function viewOzet(plan) {
+    const k = PERIODS.find(([key]) => key === period)[2];
+    const A = accounts(plan);
+    const m = (v, sign = false) => money(v * k, 0, sign);
+    const cls = (v) => (v > 0 ? 'c-up' : v < 0 ? 'c-down' : '');
+    const tri = (label, a, b, o = {}) => `<div class="ur-tri${o.strong ? ' strong' : ''}${o.line ? ' line' : ''}${o.indent ? ' indent' : ''}${o.muted ? ' muted' : ''}"><span>${label}</span><span class="${o.ca || ''}">${a}</span><span class="${o.cb || ''}">${b}</span></div>`;
+    const grp = (t) => `<div class="ur-grp">${t}</div>`;
+    const periodName = PERIODS.find(([key]) => key === period)[1].toLocaleLowerCase('tr');
+    if (!plan.rows.length) return `<div class="ur-card ur-empty"><h2>Özet için bina ekleyin</h2><p class="ur-sub">Binalar sekmesinde planınızı kurduğunuzda gelir tablosu burada oluşur.</p><a class="ur-btn primary" href="#uretim/binalar" style="text-decoration:none;margin-top:10px">Binalar'a git</a></div>`;
+    const income = `<section class="ur-card" aria-labelledby="h-inc"><h2 id="h-inc">Gelir tablosu (${periodName})</h2>
+      <p class="ur-sub">Kontratta komisyon yoktur, taşıma borsanın yarısıdır.</p>
+      <div class="ur-tri head"><span></span><span>Borsa</span><span>Kontrat</span></div>
+      ${grp('Gelir')}${tri('Brüt satış', m(A.grossX), m(A.grossC))}
+      ${tri('Komisyon (%4)', m(-A.fee), '—', { indent: true, muted: true })}${tri('Taşıma', m(-A.trX), m(-A.trC), { indent: true, muted: true })}
+      ${tri('Net satış', m(A.netX), m(A.netC), { strong: true, line: true })}
+      ${grp('Maliyet')}${tri('Girdi alımları', m(-A.buy), m(-A.buy), { indent: true })}${tri('Bina maaşları', m(-A.direct), m(-A.direct), { indent: true })}
+      ${tri('Yönetim gideri', m(-A.admin), m(-A.admin), { indent: true })}${tri('Toplam maliyet', m(-A.cost), m(-A.cost), { strong: true, line: true })}
+      ${tri('Brüt kâr', m(A.profitX, true), m(A.profitC, true), { strong: true, line: true, ca: cls(A.profitX), cb: cls(A.profitC) })}
+      ${grp('İşletme gideri')}${tri('Yönetici maaşları', m(-A.exec), m(-A.exec), { indent: true })}
+      ${tri('Net nakit', m(A.cashX, true), m(A.cashC, true), { strong: true, line: true, ca: cls(A.cashX), cb: cls(A.cashC) })}
+      <div class="ur-hr"></div>
+      ${tri('Brüt kâr marjı', A.netX ? pctText(A.profitX / A.netX, 1) : '—', A.netC ? pctText(A.profitC / A.netC, 1) : '—', { muted: true })}
+      ${tri('Yönetici tasarrufu', m(A.saved, true), m(A.saved, true), { muted: true, ca: 'c-up', cb: 'c-up' })}
+      <p class="ur-note">Brüt kâr: net satıştan girdi, bina maaşı ve yönetim gideri düşülmüş hâli. Net nakit: yönetici maaşları da düşülünce günün sonunda kasaya giren. Yönetici tasarrufu bilgi satırıdır, toplama girmez.</p></section>`;
+    const parts = [['Girdi alımları', A.buy, 'var(--accent)'], ['Bina maaşları', A.direct, '#3e78b2'], ['Yönetim gideri', A.admin, 'var(--price)'], ['Yönetici maaşları', A.exec, '#6f86a3']].filter((x) => x[1] > 0);
+    const total = parts.reduce((a, x) => a + x[1], 0);
+    const costs = total > 0 ? `<section class="ur-card" aria-labelledby="h-cost"><h2 id="h-cost">Maliyet dağılımı (${periodName})</h2>
+      <div class="ur-bar" role="img" aria-label="${parts.map(([n, v]) => `${n} ${pctText(v / total, 0)}`).join(', ')}">${parts.map(([, v, c]) => `<span style="width:${(v / total * 100).toFixed(2)}%;background:${c}"></span>`).join('')}</div>
+      ${parts.map(([n, v, c]) => `<div class="ur-kv"><span><i class="ur-dot" style="background:${c}"></i>${n}</span><span>${m(v)} <small class="c-muted">${pctText(v / total, 1)}</small></span></div>`).join('')}
+      <div class="ur-hr"></div>${kv('Toplam gider', m(total), '', true)}</section>` : '';
+    const products = plan.sales.map((x) => {
+      const ux = x.exchangeUnit == null ? null : x.exchangeUnit - x.unitCost;
+      const uc = x.contractUnit == null ? null : x.contractUnit - x.unitCost;
+      return `<div class="ur-card" style="padding:12px"><div class="ur-row" style="gap:6px;flex-wrap:wrap"><span style="font-size:18px;font-weight:600">${esc(nameOf(x.product))}</span>${chip(`Q${x.quality}`)}<span class="ur-note" style="margin-left:auto">${smart(x.surplusDay)} adet/gün</span></div>
+        <div class="ur-tri head"><span></span><span>Borsa</span><span>Kontrat</span></div>
+        ${tri('Birim maliyet', money(x.unitCost, 2), money(x.unitCost, 2))}${tri('Net birim gelir', money(x.exchangeUnit, 2), money(x.contractUnit, 2))}
+        ${tri('Birim kâr', money(ux, 2, true), money(uc, 2, true), { strong: true, line: true, ca: cls(ux), cb: cls(uc) })}
+        ${tri(`Kâr (${periodName})`, x.profitExchangeDay == null ? '—' : m(x.profitExchangeDay, true), x.profitContractDay == null ? '—' : m(x.profitContractDay, true), { ca: cls(x.profitExchangeDay), cb: cls(x.profitContractDay) })}
+        ${tri('Saat başı, seviye başı kâr', money(x.pphplExchange, 0, true), money(x.pphplContract, 0, true), { muted: true })}</div>`;
+    }).join('');
+    let execs = '';
+    if (setup.executives.length) {
+      const a = H.executiveAnalysis(setup, data, plan, { scope: execScope });
+      const rowsE = a.members.map((mm) => `<div class="ur-line"><div class="grow"><div class="title ${mm.active ? '' : 'c-muted'}">${esc(mm.name || positionName(mm.position))}</div>
+          <div class="ur-row" style="gap:6px;margin-top:2px">${chip(positionName(mm.position), mm.active ? '' : 'muted')}<span class="ur-note">${mm.active ? `net ${m(mm.netDay, true)}` : `maaş ${m(mm.salary)}`}</span></div></div>
+        <div style="text-align:right">${mm.active ? `<div class="c-up" style="font-weight:600;font-variant-numeric:tabular-nums">${m(mm.valueDay, true)}</div><span class="ur-note">maaş ${m(mm.salary)}${mm.ratio != null ? ` · ${num(mm.ratio, 1)} kat` : ''}</span>`
+    : `<div class="c-muted" style="font-weight:600">Eğitimde</div><span class="ur-note">başlayınca ${m(mm.ifActiveValueDay || 0, true)}</span>`}</div></div>`).join('');
+      execs = `<section class="ur-card" aria-labelledby="h-ex2"><h2 id="h-ex2">Yöneticiler ne kazandırıyor (${periodName})</h2>
+        ${seg('execScope', [['plan', 'Bu plan'], ['company', 'Tüm şirket']], execScope, 'Kapsam')}
+        ${execScope === 'company' && !setup.otherWagesDay ? '<p class="ur-note">Tüm şirket için Kurulum › Yönetim gideri kartına planda olmayan binaların günlük maaşını girin; şimdilik yalnız plan hesaplanıyor.</p>' : ''}
+        <div class="ur-box">${kv('Yöneticilerin kazandırdığı', m(a.teamValueDay))}${kv('Yönetici maaşları', m(a.salariesDay))}${kv('Net getiri', m(a.teamNetDay, true), cls(a.teamNetDay), true)}</div>
+        <div>${rowsE}</div>
+        <p class="ur-note">Kişi başı değer, yönetici bugün ayrılsa kaybedilecek maaş tasarrufudur. Takım toplamı oyundaki tasarruf oranına dayanır; kişi başı değerler yaklaşık (±1 puan).</p></section>`;
+    }
+    const manualCount = Object.keys(setup.prices || {}).length + Object.keys(setup.contractPrices || {}).length + (setup.transportPrice != null ? 1 : 0);
+    const evs = activeEvents().filter((e) => setup.events?.[e.product] !== false && setup.buildings.some((b) => b.product === e.product));
+    const notes = [
+      live ? `Borsa fiyatları ${ago(live.t)} güncellendi.` : 'Borsa fiyatları okunamadı; fiyatları elle girin.',
+      manualCount ? `${manualCount} fiyat elle girildi.` : 'Bütün fiyatlar borsadan.',
+      `Ekonomi fazı: ${H.ECONOMY_PHASES[setup.economyPhase]}.${evs.length ? ` Etkin olay: ${evs.map((e) => `${nameOf(e.product)} ${e.pct > 0 ? '+' : '−'}%${Math.abs(e.pct)}`).join(', ')}.` : ''}`,
+      'Vergi ve muhasebe ücreti kâra dahil değil; oyunda vergi, sahip olunan nakde bağlıdır.',
+      ...plan.warnings.map((w) => w.text),
+    ];
+    return `
+      <div class="ur-head"><div><h1>Ön muhasebe</h1><p class="ur-sub">Planınızın gelir, gider ve kâr tablosu.</p></div></div>
+      ${seg('period', PERIODS.map(([key, t]) => [key, t]), period, 'Dönem')}
+      <div class="ur-grid2">
+        <div class="ur-card" style="padding:12px;gap:2px"><span class="ur-note" style="font-weight:600">Brüt kâr · Borsa</span><span class="${cls(A.profitX)}" style="font:600 22px var(--font-c)">${m(A.profitX, true)}</span><span class="ur-note">Net nakit ${m(A.cashX, true)}</span></div>
+        <div class="ur-card" style="padding:12px;gap:2px"><span class="ur-note" style="font-weight:600">Brüt kâr · Kontrat</span><span class="${cls(A.profitC)}" style="font:600 22px var(--font-c)">${m(A.profitC, true)}</span><span class="ur-note">Net nakit ${m(A.cashC, true)}</span></div></div>
+      ${income}${costs}
+      ${plan.sales.length ? `<section style="display:flex;flex-direction:column;gap:10px"><h2>Ürün bazında kârlılık</h2><p class="ur-sub">Her ürünün maliyeti kendi zincirindeki girdi ve işçilikle hesaplanır.</p>${products}</section>` : ''}
+      ${execs}
+      <section class="ur-card" aria-labelledby="h-notes"><h2 id="h-notes">Hesap notları</h2>${notes.map((n) => `<p class="ur-note">• ${esc(n)}</p>`).join('')}</section>
+      <div class="ur-row"><button type="button" class="ur-btn grow" data-act="copySummary">${icon('copy')}Özeti kopyala</button><a class="ur-btn grow" href="#uretim/alimsatim" style="text-decoration:none">Alım-Satım'a dön</a></div>`;
+  }
+  function summaryText(plan) {
+    const k = PERIODS.find(([key]) => key === period)[2];
+    const A = accounts(plan);
+    const m = (v) => money(v * k);
+    const L = [`DentSimco üretim özeti · Realm ${r} · ${PERIODS.find(([key]) => key === period)[1]} · ${H.ECONOMY_PHASES[setup.economyPhase]}`,
+      `Binalar: ${setup.buildings.map((b) => `${nameOf(b.product)} Q${b.quality} (${buildingName(b.type)} ${b.level})`).join(', ')}`, '',
+      `                      Borsa        Kontrat`,
+      ...[['Brüt satış', A.grossX, A.grossC], ['Komisyon', -A.fee, 0], ['Taşıma', -A.trX, -A.trC], ['Net satış', A.netX, A.netC], ['Girdi alımları', -A.buy, -A.buy],
+        ['Bina maaşları', -A.direct, -A.direct], ['Yönetim gideri', -A.admin, -A.admin], ['Brüt kâr', A.profitX, A.profitC], ['Yönetici maaşları', -A.exec, -A.exec],
+        ['Net nakit', A.cashX, A.cashC]].map(([n, a, b]) => `${n.padEnd(20)}${m(a).padStart(12)} ${m(b).padStart(13)}`)];
+    return L.join('\n');
   }
 
   // ---- KURULUM ----
@@ -423,7 +643,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         <div class="ur-stat"><span>Plan seviyesi</span><span>${num(levels)}</span></div>
         <div class="ur-stat"><span>Maaş/gün</span><span>${money(plan.totals.wagesDayNet)}</span></div></div>
       <div class="ur-row" style="flex-wrap:wrap"><button type="button" class="ur-btn primary grow" data-act="bNew" style="flex-basis:100%">${icon('plus')}Bina ekle</button>
-        ${rows.length > 1 ? '<button type="button" class="ur-btn grow" data-act="autoQuality">Otomatik kalite</button>' : ''}</div>
+        ${rows.length > 1 ? '<button type="button" class="ur-btn grow" data-act="bulk">Toplu düzenle</button><button type="button" class="ur-btn grow" data-act="autoQuality">Otomatik kalite</button>' : ''}</div>
       ${rows.length ? `<div class="ur-bgrid">${cards}</div>` : empty}
       ${rows.length ? summaryCard(plan) : ''}
       ${missingCard(plan)}`;
@@ -512,7 +732,8 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (!sheet || !data) { sheetHost.innerHTML = ''; return; }
     const focusKey = document.activeElement?.closest?.('.ur-panel') ? document.activeElement.getAttribute('data-d') || document.activeElement.getAttribute('data-act') : null;
     const html = sheet.kind === 'building' ? sheetBuilding() : sheet.kind === 'exec' ? sheetExec() : sheet.kind === 'api' ? sheetApi()
-      : sheet.kind === 'export' ? sheetExport() : sheet.kind === 'import' ? sheetImport() : sheet.kind === 'reset' ? sheetReset() : '';
+      : sheet.kind === 'export' ? sheetExport() : sheet.kind === 'import' ? sheetImport() : sheet.kind === 'reset' ? sheetReset()
+        : sheet.kind === 'bulk' ? sheetBulk() : '';
     sheetHost.innerHTML = `<div class="ur-sheet ur" style="padding:0;max-width:none;margin:0" data-act="sheetBackdrop"><div class="ur-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">${html}</div></div>`;
     document.body.style.overflow = 'hidden';
     if (first) sheetHost.querySelector('.ur-panel select, .ur-panel input, .ur-panel textarea, .ur-panel button')?.focus();
@@ -640,6 +861,24 @@ export function mountUretim(root, { realm = 0 } = {}) {
       ${sheet.error ? `<div class="ur-msg err" role="alert">${esc(sheet.error)}</div>` : ''}
       <div class="ur-panel-foot"><button type="button" class="ur-btn grow" data-act="sheetClose">Vazgeç</button><button type="button" class="ur-btn primary grow" data-act="importApply">Yükle</button></div>`;
   }
+  function sheetBulk() {
+    const sel = sheet.sel;
+    const list = setup.buildings.map((b, i) => `<label class="ur-check"><input type="checkbox" data-bsel="${i}" ${sel.has(i) ? 'checked' : ''}>
+      <span class="grow" style="flex:1;min-width:0"><span style="font-weight:600">${esc(nameOf(b.product))}</span> <span class="ur-note">Q${b.quality} · ${esc(buildingName(b.type))}</span></span>
+      <span style="font:600 18px var(--font-c)">${num(b.level)}</span></label>`).join('');
+    const n = sel.size;
+    const dis = n ? '' : 'disabled';
+    return `${panelHead('Toplu düzenle', `${num(setup.buildings.length)} bina`)}
+      <div class="ur-row"><span class="grow ur-note" style="font-weight:600">${num(n)} bina seçili</span><button type="button" class="ur-btn" data-act="bulkAll">${n === setup.buildings.length ? 'Seçimi kaldır' : 'Hepsini seç'}</button></div>
+      <div>${list}</div>
+      <div class="ur-field"><span>Seviye</span><div class="ur-row"><button type="button" class="ur-btn" data-act="bulkLevel" data-v="-1" ${dis}>−1</button><button type="button" class="ur-btn" data-act="bulkLevel" data-v="1" ${dis}>+1</button>
+        <div class="grow"><input type="text" inputmode="numeric" data-d="bulkLevel" placeholder="Seviye" aria-label="Seçilenlerin seviyesi"></div><button type="button" class="ur-btn tint" data-act="bulkSetLevel" ${dis}>Ayarla</button></div></div>
+      <div class="ur-field"><span>Robot (üretim binaları)</span><div class="ur-row"><button type="button" class="ur-btn grow" data-act="bulkRobot" data-v="1" ${dis}>Robot var</button><button type="button" class="ur-btn grow" data-act="bulkRobot" data-v="0" ${dis}>Robot yok</button></div></div>
+      <div class="ur-field"><span>Ürün kalitesi</span><div class="ur-row"><div class="grow"><select data-d="bulkQ" aria-label="Seçilenlerin kalitesi">${H.allowedQualities(0).map((q) => `<option value="${q}">Q${q}</option>`).join('')}</select></div>
+        <button type="button" class="ur-btn tint" data-act="bulkQuality" ${dis}>Ayarla</button></div></div>
+      <button type="button" class="ur-btn danger" data-act="bulkDel" ${dis}>${icon('trash')}Seçilenleri sil</button>
+      <div class="ur-panel-foot"><button type="button" class="ur-btn primary grow" data-act="sheetClose">Bitti</button></div>`;
+  }
   function sheetReset() {
     return `${panelHead('Kurulum sıfırlansın mı?', `Realm ${r}`)}
       <p class="ur-sub">${num(setup.buildings.length)} bina, ${num(setup.executives.length)} yönetici ve tüm ayarlar bu tarayıcıdan silinir. Geri alınamaz.</p>
@@ -657,6 +896,21 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (!data) return;
     const set = (patch) => commit({ ...setup, ...patch });
     if (act === 'phase') return set({ economyPhase: Number(v) });
+    if (act === 'refreshPrices') return refreshPrices();
+    if (act === 'period') { period = v; try { localStorage.setItem(PERIOD_KEY, v); } catch { /* yok */ } return render(); }
+    if (act === 'execScope') { execScope = v; return render(); }
+    if (act === 'buyPolicy') return set({ buyPolicy: v });
+    if (act === 'priceReset') { const prices = { ...setup.prices }; delete prices[v]; return set({ prices }); }
+    if (act === 'contractReset') { const contractPrices = { ...setup.contractPrices }; delete contractPrices[v]; return set({ contractPrices }); }
+    if (act === 'transportReset') return set({ transportPrice: null });
+    if (act === 'keep') { const keep = { ...setup.keep }; if (keep[v]) delete keep[v]; else keep[v] = true; return set({ keep }); }
+    if (act === 'copySummary') {
+      const text = summaryText(evaluate());
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(() => toast('Özet panoya kopyalandı.'), () => toast('Kopyalanamadı.'));
+      else toast('Bu tarayıcı panoya kopyalamayı desteklemiyor.');
+      return;
+    }
+    if (act === 'bulk') return openSheet('bulk', null, { sel: new Set(setup.buildings.map((_, i) => i)) });
     if (act.startsWith('rec.')) return set({ recreation: { ...setup.recreation, [act.slice(4)]: Number(v) } });
     if (act === 'adminMode') return set({ admin: { ...setup.admin, mode: v } });
     if (act === 'substitution') return set({ substitution: setup.substitution === false });
@@ -710,6 +964,27 @@ export function mountUretim(root, { realm = 0 } = {}) {
     // panel içi
     if (act === 'sheetClose') return closeSheet();
     if (!sheet) return;
+    if (sheet.kind === 'bulk') {
+      const sel = sheet.sel;
+      const apply = (fn) => commit({ ...setup, buildings: setup.buildings.map((b, i) => (sel.has(i) ? fn(b) : b)) });
+      if (act === 'bulkAll') { sheet.sel = sel.size === setup.buildings.length ? new Set() : new Set(setup.buildings.map((_, i) => i)); return renderSheet(); }
+      if (act === 'bulkLevel') return apply((b) => ({ ...b, level: Math.max(1, b.level + Number(v)) }));
+      if (act === 'bulkSetLevel') {
+        const n = parseNum(sheetHost.querySelector('[data-d="bulkLevel"]')?.value);
+        if (!(n >= 1)) return toast('Seviye için 1 ya da üstü bir sayı girin.');
+        return apply((b) => ({ ...b, level: Math.floor(n) }));
+      }
+      if (act === 'bulkRobot') return apply((b) => (H.buildingCategory(data, b.type) === 'production' ? { ...b, robots: v === '1' } : b));
+      if (act === 'bulkQuality') { const q = Number(sheetHost.querySelector('[data-d="bulkQ"]')?.value || 0); return apply((b) => ({ ...b, quality: q })); }
+      if (act === 'bulkDel') {
+        const count = sel.size;
+        sheet.sel = new Set();
+        commit({ ...setup, buildings: setup.buildings.filter((_, i) => !sel.has(i)) });
+        if (!setup.buildings.length) closeSheet();
+        return toast(`${count} bina silindi.`);
+      }
+      return;
+    }
     const d = sheet.draft;
     if (act === 'dq') { d.quality = Number(v); return renderSheet(); }
     if (act === 'dLevel') { d.level = Math.max(1, (Number(d.level) || 1) + Number(v)); return renderSheet(); }
@@ -780,6 +1055,26 @@ export function mountUretim(root, { realm = 0 } = {}) {
   function onChange(ev) {
     const t = ev.target;
     if (!data) return;
+    if (t.dataset?.bsel != null && sheet?.kind === 'bulk') {
+      const i = Number(t.dataset.bsel);
+      if (t.checked) sheet.sel.add(i); else sheet.sel.delete(i);
+      return renderSheet();
+    }
+    if (t.dataset?.p) {
+      const [kind, id, q] = t.dataset.p.split(':');
+      const n = parseNum(t.value);
+      const value = n == null || n < 0 ? null : n;
+      if (kind === 'transport') return commit({ ...setup, transportPrice: value }, { soft: true });
+      const key = `${id}:${q}`;
+      const map = { ...(kind === 'contract' ? setup.contractPrices : setup.prices) };
+      if (value == null) delete map[key]; else map[key] = value;
+      return commit({ ...setup, [kind === 'contract' ? 'contractPrices' : 'prices']: map }, { soft: true });
+    }
+    if (t.dataset?.bq) {
+      const buyQuality = { ...setup.buyQuality };
+      if (t.value === '') delete buyQuality[t.dataset.bq]; else buyQuality[t.dataset.bq] = Number(t.value);
+      return commit({ ...setup, buyQuality });
+    }
     const f = t.dataset?.f;
     if (f) {
       const n = parseNum(t.value);
@@ -825,7 +1120,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
   }
   function onKey(ev) {
     if (ev.key === 'Escape' && sheet) { ev.preventDefault(); closeSheet(); }
-    if (ev.key === 'Enter' && ev.target.matches?.('.ur input[data-f], .ur-panel input[data-d]')) ev.target.blur();
+    if (ev.key === 'Enter' && ev.target.matches?.('.ur input[data-f], .ur input[data-p], .ur-panel input[data-d]')) ev.target.blur();
   }
   function onHash() {
     const [key, sub] = location.hash.slice(1).split('/');
