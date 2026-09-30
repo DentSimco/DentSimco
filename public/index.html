@@ -268,7 +268,7 @@
   };
   const MODULES = {
     borsa: () => import('./borsa.js').then((m) => m.mountBorsa),
-    uretim: async () => soon('Üretim ve kâr', 'Sıradaki aşama. Bina, ürün, kalite ve seviye seçince saatlik maliyeti, borsa değerini ve kârı hesaplayacak.'),
+    uretim: () => import('./uretim.js').then((m) => m.mountUretim),
     perakende: async () => soon('Perakende', 'Üretimden sonra gelecek. Mağazada satmanın borsada satmaktan kârlı olup olmadığını gösterecek.'),
   };
 
@@ -293,7 +293,8 @@
   }
 
   async function route() {
-    const key = MODULES[location.hash.slice(1)] ? location.hash.slice(1) : 'borsa';
+    const head = location.hash.slice(1).split('/')[0]; // #uretim/binalar → uretim (alt sekmeyi modül okur)
+    const key = MODULES[head] ? head : 'borsa';
     if (key === currentKey) return;
     const my = ++routeToken;
     currentKey = key;
