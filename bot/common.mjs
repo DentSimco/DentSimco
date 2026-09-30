@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 export const CONFIG = {
   realms: [0, 1],
   simcoBase: 'https://www.simcompanies.com',
-  encyclopedia: { lang: 'en', phase: 0 },
+  encyclopedia: { lang: 'tr', phase: 0 }, // Türkçe ürün adları; faz 0 = Durgunluk (hesap motoru diğer fazları formülle bulur)
 
   shards: 16,
   rawRetentionDays: 35,
