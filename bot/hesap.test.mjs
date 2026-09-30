@@ -427,6 +427,21 @@ test('Şimdiki çekirdek değerlerle (655, 700, 745) etki eski tablodan yaklaş�
 
 // =====================================================================================================
 section('İç tutarlılık');
+
+// ---- Üretim hızı: elle girilen bonus + rekreasyon (kullanıcı örnekleri) ----
+test('Üretim hızı: elle %9, rekreasyon 0 → toplam %9', () => {
+  near(H.speedBonus({ extraBonusPct: 9, recreation: { park: 0, temple: 0, lake: 0 } }, 'production'), 0.09, 6);
+});
+test('Üretim hızı: elle %7 + rekreasyon 9 seviye (3+3+3) → toplam %16', () => {
+  near(H.speedBonus({ extraBonusPct: 7, recreation: { park: 3, temple: 3, lake: 3 } }, 'production'), 0.16, 6);
+});
+test('Üretim hızı: elle %9 + rekreasyon 9 seviye → toplam %18', () => {
+  near(H.speedBonus({ extraBonusPct: 9, recreation: { park: 3, temple: 3, lake: 3 } }, 'production'), 0.18, 6);
+});
+test('Üretim hızı: elle bonus girilmemişse yalnız rekreasyon sayılır (eski kurulumlar değişmez)', () => {
+  near(H.speedBonus({ recreation: { park: 3, temple: 3, lake: 3 } }, 'production'), 0.09, 6);
+});
+
 test('Veri: her ürünün maaşı = 345 × binanın maaş çarpanı', () => {
   for (const p of Object.values(DATA.products)) {
     near(p.baseSalary, 345 * DATA.buildings[p.building].salaryModifier, 6, p.name);
