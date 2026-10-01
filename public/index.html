@@ -248,6 +248,7 @@
     <a href="#borsa" data-nav="borsa">Borsa</a>
     <a href="#uretim" data-nav="uretim">Üretim</a>
     <a href="#perakende" data-nav="perakende">Perakende</a>
+    <a href="#yonetim" data-nav="yonetim">Yönetim</a>
   </nav>
   <div class="realm" role="group" aria-label="Realm">
     <button type="button" data-realm="0" aria-pressed="true" title="Realm 1">R1</button>
@@ -269,6 +270,7 @@
   const MODULES = {
     borsa: () => import('./borsa.js').then((m) => m.mountBorsa),
     uretim: () => import('./uretim.js').then((m) => m.mountUretim),
+    yonetim: () => import('./yonetim.js').then((m) => m.mountYonetim),
     perakende: async () => soon('Perakende', 'Üretimden sonra gelecek. Mağazada satmanın borsada satmaktan kârlı olup olmadığını gösterecek.'),
   };
 
