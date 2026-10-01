@@ -8,7 +8,7 @@
 //   finance:  { cash, bondsBought, bondsIssued, bankLevel }        // bono = oyundaki tahvil
 //   admin:    { totalLevels, wagesDay }      // yönetim gideri için: toplam bina seviyesi, yönetim gideri DAHİL günlük maaş
 //   retail:   { marginDay, otherSpeedPct }   // perakende: günlük brüt marj (satış − mal maliyeti), ekip dışı satış hızı bonusu
-//   research: { outputDay, price, otherSpeedPct, upgrades: [{ label, researchId, from, to, price }] }
+//   research: { outputDay, price, upgrades: [{ label, researchId, from, to, price }] }
 
 import * as H from './hesap.js';
 
@@ -131,7 +131,8 @@ export function companyBases(company) {
   // satış/üretim hızı: adet ∝ (100 + diğer + ekip)
   const retailPerPct = c.retail.marginDay / (100 + c.retail.otherSpeedPct + team.salesSpeedPct);
   const price = num(c.research.price, 0);
-  const researchPerPct = (c.research.outputDay * price) / (100 + c.research.otherSpeedPct + team.researchSpeedPct);
+  // araştırma hızı çarpandır: şimdiki üretim = ekipsiz üretim × (1 + hız); girilen üretim ekiple birlikte
+  const researchPerPct = (c.research.outputDay * price) / (100 + team.researchSpeedPct);
   return { team, gross, wageBaseDay, retailPerPct, researchPerPct, assets: H.assessableAssets(c.finance) };
 }
 
