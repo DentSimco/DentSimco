@@ -221,7 +221,13 @@ export function speedBonus(setup, category) {
   return BONUS_CATEGORIES.has(category) ? recreationBonus(setup.recreation) + num(setup.extraBonusPct, 0) / 100 : 0;
 }
 
-export function buildingRate(building, setup, data, admin, now = Date.now()) {
+// Araştırma hızı (CTO, bilim puanı) rekreasyonla toplanmaz, toplam üretimi çarpar: ×(1 + %hız).
+// Oyunda doğrulandı: 150 seviye Yemek tarifi, bilim 0 → 18.461, bilim 60 (+%120) → 40.614 (= ×2,2).
+export const researchFactor = (category, effects) => (category === 'research' ? 1 + num(effects?.researchSpeedPct, 0) / 100 : 1);
+// Ekip etkileri: kurulumdaki yöneticilerden (Yönetim sekmesi de aynı listeyi verir)
+export const setupTeamEffects = (setup = {}) => teamEffects(setup.executives || [], { bankLevel: setup.finance?.bankLevel });
+
+export function buildingRate(building, setup, data, admin, now = Date.now(), effects = null) {
   const b = building || {};
   const errors = [];
   const notes = [];
@@ -239,17 +245,18 @@ export function buildingRate(building, setup, data, admin, now = Date.now()) {
   const eventPct = eventOn ? activeEventPct(data, p.id, now) : 0;
   const efficiency = clamp(num(b.efficiency, 100), 0, 200) / 100;
   const bonus = speedBonus(setup, category);
+  const teamFactor = researchFactor(category, effects || setupTeamEffects(setup));
   const phaseFactor = phaseSpeedFactor(data, setup, p);
   if (bonus >= 1) errors.push('Üretim hızı bonusu %100 veya üzeri olamaz');
   const robots = !!b.robots && category !== 'research';
   if (b.robots && category === 'research') notes.push('Araştırma binalarına robot kurulamaz; robot yok sayıldı');
   const ok = errors.length === 0;
-  const perLevelHour = ok ? (p.perHour * phaseFactor * (1 + eventPct / 100) * efficiency) / (1 - bonus) : 0;
+  const perLevelHour = ok ? (p.perHour * phaseFactor * (1 + eventPct / 100) * efficiency * teamFactor) / (1 - bonus) : 0;
   const hourly = perLevelHour * level;
   const wageHour = p.baseSalary * level * (robots ? ROBOT_WAGE_FACTOR : 1); // olay, bonus ve verimlilik maaşı değiştirmez
   const unitWorker = hourly > 0 ? wageHour / hourly : null;
   return {
-    id: b.id, ok, type, category, product: p.id, quality, level, robots, eventPct, efficiency, bonus, phaseFactor,
+    id: b.id, ok, type, category, product: p.id, quality, level, robots, eventPct, efficiency, bonus, phaseFactor, teamFactor,
     perLevelHour, hourly, daily: hourly * HOURS_PER_DAY,
     wageHour,
     wageDayGross: wageHour * HOURS_PER_DAY * (1 + admin.gross),
@@ -358,7 +365,8 @@ export function quickAdd(product, quality, missingPerHour, setup, data, now = Da
   const bonus = speedBonus(setup, buildingCategory(data, p.building));
   if (bonus >= 1) return null;
   const eventPct = setup.events?.[product] === false ? 0 : activeEventPct(data, product, now);
-  const perLevelHour = (p.perHour * phaseSpeedFactor(data, setup, p) * (1 + eventPct / 100)) / (1 - bonus);
+  const teamFactor = researchFactor(buildingCategory(data, p.building), setupTeamEffects(setup));
+  const perLevelHour = (p.perHour * phaseSpeedFactor(data, setup, p) * (1 + eventPct / 100) * teamFactor) / (1 - bonus);
   return { type: p.building, product, quality: productQuality(p, quality), perLevelHour,
     levels: Math.max(1, Math.ceil(missingPerHour / perLevelHour - 1e-9)) };
 }
@@ -392,8 +400,9 @@ export function autoQuality(setup, data) {
 // Planın tamamı: üretim, girdi dağıtımı, alımlar, birim maliyetler, satışlar ve günlük toplamlar
 // ---------------------------------------------------------------------------------------------------------------
 
-export function evaluatePlan(setup = {}, data, market = null, { now = Date.now() } = {}) {
+export function evaluatePlan(setup = {}, data, market = null, { now = Date.now(), effects = null } = {}) {
   const admin = adminInfo(setup, data);
+  const team = effects || setupTeamEffects(setup);
   const priceOf = makePriceLookup(setup, market);
   const substitution = setup.substitution !== false;
   const warnings = [];
@@ -401,7 +410,7 @@ export function evaluatePlan(setup = {}, data, market = null, { now = Date.now()
 
   // 1) Binalar
   const rows = (setup.buildings || []).map((b, index) =>
-    buildingRate({ ...b, id: b.id ?? `b${index + 1}` }, setup, data, admin, now));
+    buildingRate({ ...b, id: b.id ?? `b${index + 1}` }, setup, data, admin, now, team));
   for (const r of rows) for (const text of r.errors) warnings.push({ kind: 'building', building: r.id, text });
 
   // 2) Arz havuzları: aynı ürün ve kalitedeki binalar birlikte
