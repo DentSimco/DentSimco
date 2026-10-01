@@ -284,7 +284,7 @@
     uretim: () => import('./uretim.js').then((m) => m.mountUretim),
     yonetim: () => import('./yonetim.js').then((m) => m.mountYonetim),
     perakende: async () => soon('Perakende', 'Üretimden sonra gelecek. Mağazada satmanın borsada satmaktan kârlı olup olmadığını gösterecek.'),
-    ozet: async () => soon('Şirket Özeti', 'Üretim, Perakende ve Yönetim hesaplarını tek tabloda toplayacak. Henüz hazır değil.'),
+    ozet: () => import('./sirket-ozet.js').then((m) => m.mountOzet),
   };
 
   let realm = 0;
