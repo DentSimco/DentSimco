@@ -58,6 +58,11 @@
   .modules a { padding: 8px 12px; border-radius: 9px; color: var(--muted); text-decoration: none; font-weight: 500; }
   .modules a:hover { color: var(--text); }
   .modules a[aria-current="page"] { color: var(--text); background: var(--raise); }
+  .subnav { display: none; gap: 2px; padding: 6px 16px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); }
+  .subnav.on { display: flex; }
+  .subnav a { padding: 7px 12px; border-radius: 9px; color: var(--muted); text-decoration: none; font-weight: 500; white-space: nowrap; }
+  .subnav a:hover { color: var(--text); }
+  .subnav a[aria-current="page"] { color: var(--text); background: var(--raise); }
   .realm { margin-left: auto; display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 11px; }
   .realm button { min-width: 44px; height: 32px; padding: 0 10px; border-radius: 8px; color: var(--muted); font: 600 15px/1 var(--font-c); }
   .realm button[aria-pressed="true"] { background: var(--raise-2); color: var(--accent); }
@@ -114,7 +119,7 @@
   .picker-empty { margin: 14px 10px; color: var(--muted); }
 
   .quals { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; padding: 2px; scrollbar-width: none; }
-  .quals::-webkit-scrollbar, .ranges::-webkit-scrollbar, .modules::-webkit-scrollbar { display: none; }
+  .quals::-webkit-scrollbar, .ranges::-webkit-scrollbar, .modules::-webkit-scrollbar, .subnav::-webkit-scrollbar { display: none; }
   .quals button {
     flex: none; min-width: 46px; height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px;
     color: var(--text); font: 600 15px/1 var(--font-c);
@@ -246,15 +251,19 @@
   </a>
   <nav class="modules" aria-label="Modüller">
     <a href="#borsa" data-nav="borsa">Borsa</a>
-    <a href="#uretim" data-nav="uretim">Üretim</a>
-    <a href="#perakende" data-nav="perakende">Perakende</a>
-    <a href="#yonetim" data-nav="yonetim">Yönetim</a>
+    <a href="#uretim" data-nav="kar">Kâr Hesaplayıcı</a>
   </nav>
   <div class="realm" role="group" aria-label="Realm">
     <button type="button" data-realm="0" aria-pressed="true" title="Realm 1">R1</button>
     <button type="button" data-realm="1" aria-pressed="false" title="Realm 2">R2</button>
   </div>
 </header>
+<nav class="subnav" id="subnav" aria-label="Kâr Hesaplayıcı bölümleri">
+  <a href="#uretim" data-sub="uretim">Üretim</a>
+  <a href="#perakende" data-sub="perakende">Perakende</a>
+  <a href="#yonetim" data-sub="yonetim">Yönetim</a>
+  <a href="#ozet" data-sub="ozet">Şirket Özeti</a>
+</nav>
 <main id="app"></main>
 <noscript><p style="padding:20px">DentSimco için JavaScript açık olmalı.</p></noscript>
 
@@ -262,9 +271,12 @@
   const app = document.getElementById('app');
   const realmButtons = [...document.querySelectorAll('[data-realm]')];
   const navLinks = [...document.querySelectorAll('[data-nav]')];
+  const subNav = document.getElementById('subnav');
+  const subLinks = [...subNav.querySelectorAll('[data-sub]')];
+  const CALC = new Set(['uretim', 'perakende', 'yonetim', 'ozet']); // Kâr Hesaplayıcı'nın bölümleri
 
   const soon = (title, text) => (root) => {
-    root.innerHTML = `<section class="soon"><h1>${title}</h1><p>${text}</p><a href="#borsa">Borsaya dön</a></section>`;
+    root.innerHTML = `<section class="soon"><h1>${title}</h1><p>${text}</p><a href="#uretim">Üretim'e dön</a></section>`;
     return { setRealm() {}, destroy() { root.replaceChildren(); } };
   };
   const MODULES = {
@@ -272,6 +284,7 @@
     uretim: () => import('./uretim.js').then((m) => m.mountUretim),
     yonetim: () => import('./yonetim.js').then((m) => m.mountYonetim),
     perakende: async () => soon('Perakende', 'Üretimden sonra gelecek. Mağazada satmanın borsada satmaktan kârlı olup olmadığını gösterecek.'),
+    ozet: async () => soon('Şirket Özeti', 'Üretim, Perakende ve Yönetim hesaplarını tek tabloda toplayacak. Henüz hazır değil.'),
   };
 
   let realm = 0;
@@ -300,8 +313,14 @@
     if (key === currentKey) return;
     const my = ++routeToken;
     currentKey = key;
+    const top = CALC.has(key) ? 'kar' : key;
     for (const a of navLinks) {
-      if (a.dataset.nav === key) a.setAttribute('aria-current', 'page');
+      if (a.dataset.nav === top) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    }
+    subNav.classList.toggle('on', CALC.has(key));
+    for (const a of subLinks) {
+      if (a.dataset.sub === key) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
     }
     try {
