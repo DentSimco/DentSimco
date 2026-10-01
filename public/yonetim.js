@@ -8,8 +8,6 @@ import * as H from './hesap.js';
 import * as Y from './yonetici.js';
 import { CSS, parseNum } from './uretim.js';
 
-const STORE_KEY = (r) => `dentsimco.sirket.r${r}`;
-const URETIM_KEY = (r) => `dentsimco.uretim.r${r}`;
 const TAB_KEY = 'dentsimco.yonetim.tab';
 const TABS = [['ozet', 'Özet'], ['ekip', 'Ekip'], ['arastirma', 'Araştırma'], ['sirket', 'Şirket']];
 const POSITIONS = [['o', 'COO'], ['f', 'CFO'], ['m', 'CMO'], ['t', 'CTO'], ['v', 'COO stajyeri'], ['x', 'CFO stajyeri'],
@@ -65,18 +63,8 @@ const EXTRA_CSS = `
 .yo-res > div > span:last-child { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 `;
 
-function loadCompany(r) {
-  try {
-    const raw = localStorage.getItem(STORE_KEY(r));
-    if (raw) return { company: Y.sanitizeCompany(JSON.parse(raw)), migrated: false };
-    const moved = Y.companyFromUretim(JSON.parse(localStorage.getItem(URETIM_KEY(r)) || 'null'));
-    if (moved) { localStorage.setItem(STORE_KEY(r), JSON.stringify(moved)); return { company: moved, migrated: true }; }
-  } catch { /* gizli sekme ya da bozuk kayıt */ }
-  return { company: Y.defaultCompany(), migrated: false };
-}
-function saveCompany(r, c) {
-  try { localStorage.setItem(STORE_KEY(r), JSON.stringify(c)); return true; } catch { return false; }
-}
+const loadCompany = (r) => Y.loadCompanyRecord(r);
+const saveCompany = (r, c) => Y.saveCompanyRecord(r, c);
 
 async function loadProducts(r) {
   const path = PATHS.meta(`products_r${r}`);
@@ -337,10 +325,11 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     }).join('');
     const scores = H.teamScores(ex);
     return `<section class="ur-card" aria-labelledby="h-exec"><h2 id="h-exec">Yöneticiler</h2>
-      <p class="ur-sub">Ekibiniz yalnız burada girilir; Üretim ve Perakende hesapları da buradan okuyacak.</p>
+      <p class="ur-sub">Ekibiniz yalnız burada girilir; Üretim ve Perakende hesapları da buradan okur.</p>
       <div class="ur-row"><button type="button" class="ur-btn tint grow" data-act="apiOpen">${icon('plus')}API'den yapıştır</button><button type="button" class="ur-btn grow" data-act="execNew">${icon('plus')}Elle ekle</button></div>
       ${ex.length ? `<div>${rows}</div>` : '<p class="ur-note">Henüz yönetici yok.</p>'}
-      ${ex.length ? `<div class="ur-box"><span class="ur-note" style="font-weight:600">Ekip puanı (yalnız aktifler)</span><div class="ur-grid4" style="margin-top:6px">${SKILL_LABELS.map(([k, n]) => `<div class="ur-stat"><span>${n}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div></div>` : ''}</section>`;
+      ${ex.length ? `<div class="ur-box"><span class="ur-note" style="font-weight:600">Ekip puanı (yalnız aktifler)</span><div class="ur-grid4" style="margin-top:6px">${SKILL_LABELS.map(([k, n]) => `<div class="ur-stat"><span>${n}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div></div>` : ''}</section>
+      ${financeCard(s)}`;
   }
 
   // ---- ARAŞTIRMA ----
@@ -385,6 +374,18 @@ export function mountYonetim(root, { realm = 0 } = {}) {
   }
 
   // ---- ŞİRKET ----
+  // Nakit ve bono: vergiyi (muhasebe ücreti) ve CFO'nun değerini belirler. Banka seviyesi Üretim › Kurulum › Diğer binalar'dan gelir.
+  function financeCard(s) {
+    const c = company;
+    return `<section class="ur-card" aria-labelledby="h-fin"><h2 id="h-fin">Nakit ve bono</h2>
+        <p class="ur-sub">Vergi (muhasebe ücreti) ve muhasebecinin (CFO) kazandırdığı için.</p>
+        ${field('Nakit', 'finance.cash', inVal(c.finance.cash), { unit: '$', mode: 'numeric', hint: 'Oyunun sağ üstündeki yeşil tutar; tipik gün sonu nakdiniz.' })}
+        <div class="ur-grid2">${field('Alınan bono', 'finance.bondsBought', inVal(c.finance.bondsBought), { unit: '$', mode: 'numeric' })}${field('İhraç edilen bono', 'finance.bondsIssued', inVal(c.finance.bondsIssued), { unit: '$', mode: 'numeric' })}</div>
+        <div class="ur-box">${kv('Banka seviyesi', `${num(c.finance.bankLevel)} <span class="c-muted">(Üretim › Kurulum)</span>`)}
+          ${kv('Vergilenen varlık', money(s.tax.assets))}${kv('Vergilendirme başlangıcı', money(s.tax.threshold))}
+          ${kv('Günlük vergi', money(s.tax.day), 'c-price')}${kv('Yöneticisiz olsaydı', money(s.tax.withoutDay))}${kv('Muhasebenin günlük katkısı', money(s.sectors.cfo), 'c-up', true)}
+          <p class="ur-note">Vergi kademeli: eşiğin üstüne %0,5; +3M, +6M, +9M'de %0,5 daha, +12M'de %1 daha.</p></div></section>`;
+  }
   function viewSirket(s) {
     const c = company;
     const b = s.bases;
@@ -394,14 +395,6 @@ export function mountYonetim(root, { realm = 0 } = {}) {
         ${field('Günlük toplam maaş', 'admin.wagesDay', inVal(c.admin.wagesDay), { unit: '$', mode: 'numeric', hint: 'Bütün binaların günlük maaşı, yönetim gideri dahil (oyunda ödediğiniz).' })}
         <div class="ur-box">${kv('Brüt yönetim gideri', `%${NF[2].format(b.gross * 100)}`)}${kv('Ekibin tasarrufu', `%${num(s.team.adminSavingsPct)}`)}
           ${kv('Yönetim gidersiz maaş', money(b.wageBaseDay))}${kv('Yönetimin günlük katkısı', money(s.sectors.coo), 'c-up', true)}</div></section>
-      <section class="ur-card" aria-labelledby="h-fin"><h2 id="h-fin">Nakit, bono ve banka</h2>
-        <p class="ur-sub">Vergi (muhasebe ücreti) ve muhasebecinin (CFO) kazandırdığı için.</p>
-        ${field('Nakit', 'finance.cash', inVal(c.finance.cash), { unit: '$', mode: 'numeric', hint: 'Oyunun sağ üstündeki yeşil tutar; tipik gün sonu nakdiniz.' })}
-        <div class="ur-grid2">${field('Alınan bono', 'finance.bondsBought', inVal(c.finance.bondsBought), { unit: '$', mode: 'numeric' })}${field('İhraç edilen bono', 'finance.bondsIssued', inVal(c.finance.bondsIssued), { unit: '$', mode: 'numeric' })}</div>
-        ${field('Banka seviyesi', 'finance.bankLevel', inVal(c.finance.bankLevel), { mode: 'numeric', hint: 'Bankanız yoksa 0. Seviye başı, muhasebe puanı başı +$50k eşik (en çok 40).' })}
-        <div class="ur-box">${kv('Vergilenen varlık', money(s.tax.assets))}${kv('Vergilendirme başlangıcı', money(s.tax.threshold))}
-          ${kv('Günlük vergi', money(s.tax.day), 'c-price')}${kv('Yöneticisiz olsaydı', money(s.tax.withoutDay))}${kv('Muhasebenin günlük katkısı', money(s.sectors.cfo), 'c-up', true)}
-          <p class="ur-note">Vergi kademeli: eşiğin üstüne %0,5; +3M, +6M, +9M'de %0,5 daha, +12M'de %1 daha.</p></div></section>
       <section class="ur-card" aria-labelledby="h-ret"><h2 id="h-ret">Perakende</h2>
         <p class="ur-sub">İletişimin (CMO) satış hızı katkısı için. Satış hızı arttıkça aynı sürede daha çok ürün satılır.</p>
         ${field('Günlük perakende marjı', 'retail.marginDay', inVal(c.retail.marginDay), { unit: '$', hint: 'Mağaza ve restoranlarınızda günlük satış geliri − satılan malın maliyeti (maaşlar hariç), şu anki ekiple.' })}
