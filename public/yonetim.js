@@ -9,7 +9,7 @@ import * as Y from './yonetici.js';
 import { CSS, parseNum } from './uretim.js';
 
 const TAB_KEY = 'dentsimco.yonetim.tab';
-const TABS = [['ozet', 'Özet'], ['ekip', 'Ekip'], ['arastirma', 'Araştırma'], ['sirket', 'Şirket']];
+const TABS = [['ekip', 'Ekip'], ['muhasebe', 'Muhasebe'], ['satis', 'Satış'], ['arastirma', 'Araştırma'], ['sirket', 'Şirket']];
 const POSITIONS = [['o', 'COO'], ['f', 'CFO'], ['m', 'CMO'], ['t', 'CTO'], ['v', 'COO stajyeri'], ['x', 'CFO stajyeri'],
   ['y', 'CMO stajyeri'], ['z', 'CTO stajyeri'], ['1', 'Personel']];
 const positionName = (p) => (/^\d+$/.test(String(p)) ? 'Personel' : POSITIONS.find(([k]) => k === p)?.[1] || String(p || '?'));
@@ -88,11 +88,11 @@ export function mountYonetim(root, { realm = 0 } = {}) {
   let vwapLoading = new Set();
   let destroyed = false;
   let loadToken = 0;
-  let tab = 'ozet';
-  try { tab = localStorage.getItem(TAB_KEY) || 'ozet'; } catch { /* yok */ }
+  let tab = 'ekip';
+  try { tab = localStorage.getItem(TAB_KEY) || 'ekip'; } catch { /* yok */ }
   const fromHash = location.hash.split('/')[1];
   if (TABS.some(([k]) => k === fromHash)) tab = fromHash;
-  if (!TABS.some(([k]) => k === tab)) tab = 'ozet';
+  if (!TABS.some(([k]) => k === tab)) tab = 'ekip';
   let draft = null; // yönetici formu: { index, e }
   let api = null; // { text, parsed, error }
   let toastTimer = null;
@@ -195,7 +195,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     let body;
     try {
       const s = simulate();
-      body = tab === 'ekip' ? viewEkip(s) : tab === 'arastirma' ? viewArastirma(s) : tab === 'sirket' ? viewSirket(s) : viewOzet(s);
+      body = tab === 'ekip' ? viewEkip(s) : tab === 'muhasebe' ? viewMuhasebe(s) : tab === 'satis' ? viewSatis(s) : tab === 'arastirma' ? viewArastirma(s) : viewSirket(s);
     } catch (e) {
       console.error(e);
       body = `<div class="ur-msg err" role="alert">Bu ekran gösterilemedi: ${esc(e?.message || e)}</div>`;
@@ -205,84 +205,17 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     window.scrollTo(0, scroll);
   }
 
-  // ---- ÖZET ----
-  function missingNotes(s) {
+  // ---- MUHASEBE/VERGİ ----
+  function viewMuhasebe(s) {
     const c = company;
-    const out = [];
-    if (!c.executives.length) out.push('Ekip bölümünden yöneticilerinizi girin.');
-    if (!c.admin.wagesDay || !c.admin.totalLevels) out.push('Yönetim katkısı için Şirket › Yönetim giderini doldurun.');
-    if (!s.tax.assets) out.push('Muhasebe katkısı için Şirket › Nakit, bono ve bankayı doldurun.');
-    if (!c.retail.marginDay) out.push('İletişim katkısı için Şirket › Perakendeyi doldurun.');
-    if (!c.research.outputDay) out.push('Bilim katkısı için Araştırma › Araştırma üretimini doldurun.');
-    return out.length ? `<div class="ur-box">${out.map((t) => `<p class="ur-note">${esc(t)}</p>`).join('')}</div>` : '';
-  }
-  function effectsBox(t) {
-    const cut = SKILL_LABELS.filter(([k]) => t.scores[k] >= 61).map(([k, n]) => `${n} ${num(Math.floor(t.scores[k]))} → ${num(t.shown[k], t.shown[k] % 1 ? 2 : 0)}`);
-    return `<div class="ur-grid4">${SKILL_LABELS.map(([k, n]) => `<div class="ur-stat"><span>${n}</span><span>${num(t.scores[k], t.scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div>
-      <div class="ur-hr" style="margin:8px 0 4px"></div>
-      ${kv('Yönetim gideri tasarrufu', `%${num(t.adminSavingsPct)}`, 'c-price')}
-      ${kv('Vergilendirme başlangıcı', `$3M +$${NF[1].format(t.thresholdLift / 1e6)}M`, 'c-price')}
-      ${kv('Satış hızı', `+%${num(t.salesSpeedPct)}`)}${kv('Restoran derecesi', `+${NF[3].format(t.restaurantRating)}`)}
-      ${kv('Patent olasılığı', `%${NF[2].format(Y.patentChancePct(t))}`)}${kv('Araştırma üretim hızı', `+%${num(t.researchSpeedPct)}`)}
-      ${cut.length ? `<p class="ur-note" style="margin-top:6px">60 üstünde azalan getiri: ${cut.join(', ')}.</p>` : ''}
-      ${t.bankLevel ? `<p class="ur-note">Banka seviyesi ${num(t.bankLevel)}: muhasebe puanı başı ${money(t.thresholdPerPoint)} eşik.</p>` : ''}`;
-  }
-  function memberRow(m) {
-    const title = esc(m.name || positionName(m.position));
-    if (!m.active) {
-      const a = m.ifActive;
-      return `<div class="yo-member"><div class="top"><div><div class="name c-muted">${title}</div><div class="ur-chips" style="margin-top:4px">${chip(positionName(m.position), 'muted')}${chip('Eğitimde', 'muted')}</div></div>
-        <div class="net c-down">${money(-m.salary)}</div></div>
-        <p class="ur-note">Maaşı ödeniyor, etkisi yok. Başlayınca günde ${money(a.day)}${a.upgradeSaving > 0 ? `, kalite planında ${money(a.upgradeSaving)}` : ''} kazandırır.</p></div>`;
-    }
-    const parts = SECTOR_LABELS.map(([k, n]) => `<div><span>${n}</span><span>${money(m.by[k])}</span></div>`).join('');
-    const e = m.effects;
-    const fx = [];
-    if (e.adminSavingsPct) fx.push(`tasarruf %${num(e.adminSavingsPct)}`);
-    if (e.thresholdLift) fx.push(`eşik +$${NF[1].format(e.thresholdLift / 1e6)}M`);
-    if (e.salesSpeedPct) fx.push(`satış +%${num(e.salesSpeedPct)}`);
-    if (e.researchSpeedPct) fx.push(`araştırma +%${num(e.researchSpeedPct)}`);
-    if (e.patentPct) fx.push(`patent +%${NF[2].format(e.patentPct)}`);
-    return `<div class="yo-member"><div class="top"><div><div class="name">${title}</div><div class="ur-chips" style="margin-top:4px">${chip(positionName(m.position))}<span class="ur-note" style="align-self:center">maaş ${money(m.salary)}</span></div></div>
-      <div style="text-align:right"><div class="net ${cls(m.netDay)}">${money(m.netDay, 0, true)}</div><div class="ur-note">net/gün${m.ratio != null ? ` · ${NF[1].format(m.ratio)} kat` : ''}</div></div></div>
-      <div class="yo-parts">${parts}</div>
-      ${m.upgradeSaving > 0 ? `<p class="ur-note">Kalite planında tek seferlik tasarruf: <b>${money(m.upgradeSaving)}</b></p>` : ''}
-      ${fx.length ? `<p class="ur-note">Ayrılırsa: ${fx.join(' · ')}</p>` : ''}</div>`;
-  }
-  function viewOzet(s) {
-    const ex = company.executives;
-    const migratedNote = migrated ? '<div class="ur-msg">Yöneticileriniz ve nakdiniz Üretim kurulumundan buraya taşındı. Bundan sonra burada güncelleyin.</div>' : '';
-    if (!ex.length) {
-      return `${migratedNote}<section class="ur-card"><h1>Yönetici simülasyonu</h1>
-        <p class="ur-sub">Her yöneticinin dört alanda ne kazandırdığını gösterir: yönetim (maaş tasarrufu), muhasebe (vergi), iletişim (perakende satış hızı), bilim (araştırma ve kalite yükseltme).</p>
-        <a class="ur-btn primary" href="#yonetim/ekip">${icon('plus')}Yöneticileri gir</a></section>`;
-    }
-    const sec = SECTOR_LABELS.map(([k, n, d]) => kv(`${n} <span class="c-muted">(${d})</span>`, money(s.sectors[k]))).join('');
-    // Oyundaki gibi: brüt − tasarruf puanı = net; altında tasarruf yüzdesi
-    const grossPct = s.bases.gross * 100;
-    const savePct = Math.min(100, s.team.adminSavingsPct);
-    const savedPts = grossPct * savePct / 100;
-    const adminCard = s.company.admin.totalLevels > 0 ? `<section class="ur-card" aria-labelledby="h-adm"><h2 id="h-adm">Yönetim gideri</h2>
-        <p class="ur-sub">Toplam bina seviyesi ${num(s.company.admin.totalLevels)}. Oyundaki "Yönetim giderleri" satırıyla aynı.</p>
-        <div class="ur-box">${kv('Brüt yönetim gideri', `%${NF[2].format(grossPct)} − ${NF[2].format(savedPts)}`)}
-          ${kv('Net yönetim gideri', `%${NF[2].format(grossPct - savedPts)}`, '', true)}
-          ${kv('Yönetim tasarrufu', `%${NF[0].format(savePct)}`, savePct > 0 ? 'c-up' : '', true)}
-          ${s.sectors.coo > 0 ? kv('Günlük kazancı', money(s.sectors.coo), 'c-up') : ''}</div></section>` : '';
-    const members = [...s.members].sort((a, b) => (b.active - a.active) || (b.netDay - a.netDay));
-    return `${migratedNote}
-      <section class="ur-card" aria-labelledby="h-sum"><h2 id="h-sum">Yöneticiler ne kazandırıyor</h2>
-        <p class="ur-sub">Günlük, şu anki ekiple. Yöneticisiz bir şirkete göre.</p>
-        <div class="ur-box">${sec}<div class="ur-hr"></div>
-          ${kv('Toplam katkı', money(s.day), '', true)}${kv('Yönetici maaşları', money(s.salariesDay))}
-          ${kv('Net getiri', money(s.netDay, 0, true), cls(s.netDay), true)}</div>
-        ${s.upgradeSaving > 0 ? `<div class="ur-box">${kv('Kalite planında tek seferlik tasarruf', money(s.upgradeSaving), 'c-up', true)}<p class="ur-note">Bilim puanınız patent olasılığını yükselttiği için gereken araştırma azalır (Araştırma bölümündeki plan).</p></div>` : ''}
-        ${missingNotes(s)}</section>
-      ${adminCard}
-      <section class="ur-card" aria-labelledby="h-fx"><h2 id="h-fx">Ekibinizin etkisi</h2>
-        <p class="ur-sub">Oyundaki "Ekibinizin etkisi" ekranıyla aynı; yalnız aktif yöneticiler.</p>${effectsBox(s.team)}</section>
-      <section class="ur-card" aria-labelledby="h-mem"><h2 id="h-mem">Kişi başı</h2>
-        <p class="ur-sub">Yönetici bugün ayrılsa kaybedilecek günlük para. Azalan getiri yüzünden kişi başı değerlerin toplamı ekip toplamına eşit olmayabilir.</p>
-        <div>${members.map(memberRow).join('')}</div></section>`;
+    return `<section class="ur-card" aria-labelledby="h-fin"><h2 id="h-fin">Nakit ve bono</h2>
+        <p class="ur-sub">Vergi (muhasebe ücreti) ve muhasebecinin (CFO) kazandırdığı için.</p>
+        ${field('Nakit', 'finance.cash', inVal(c.finance.cash), { unit: '$', mode: 'numeric', hint: 'Oyunun sağ üstündeki yeşil tutar; tipik gün sonu nakdiniz.' })}
+        <div class="ur-grid2">${field('Alınan bono', 'finance.bondsBought', inVal(c.finance.bondsBought), { unit: '$', mode: 'numeric' })}${field('İhraç edilen bono', 'finance.bondsIssued', inVal(c.finance.bondsIssued), { unit: '$', mode: 'numeric' })}</div>
+        <div class="ur-box">${kv('Banka seviyesi', `${num(c.finance.bankLevel)} <span class="c-muted">(Üretim › Kurulum)</span>`)}
+          ${kv('Vergilenen varlık', money(s.tax.assets))}${kv('Vergilendirme başlangıcı', money(s.tax.threshold))}
+          ${kv('Günlük vergi', money(s.tax.day), 'c-price')}${kv('Yöneticisiz olsaydı', money(s.tax.withoutDay))}${kv('Muhasebenin günlük katkısı', money(s.sectors.cfo), 'c-up', true)}
+          <p class="ur-note">Vergi kademeli: eşiğin üstüne %0,5; +3M, +6M, +9M'de %0,5 daha, +12M'de %1 daha.</p></div></section>`;
   }
 
   // ---- YÖNETİCİLER ----
@@ -328,8 +261,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
       <p class="ur-sub">Ekibiniz yalnız burada girilir; Üretim ve Perakende hesapları da buradan okur.</p>
       <div class="ur-row"><button type="button" class="ur-btn tint grow" data-act="apiOpen">${icon('plus')}API'den yapıştır</button><button type="button" class="ur-btn grow" data-act="execNew">${icon('plus')}Elle ekle</button></div>
       ${ex.length ? `<div>${rows}</div>` : '<p class="ur-note">Henüz yönetici yok.</p>'}
-      ${ex.length ? `<div class="ur-box"><span class="ur-note" style="font-weight:600">Ekip puanı (yalnız aktifler)</span><div class="ur-grid4" style="margin-top:6px">${SKILL_LABELS.map(([k, n]) => `<div class="ur-stat"><span>${n}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div></div>` : ''}</section>
-      ${financeCard(s)}`;
+      ${ex.length ? `<div class="ur-box"><span class="ur-note" style="font-weight:600">Ekip puanı (yalnız aktifler)</span><div class="ur-grid4" style="margin-top:6px">${SKILL_LABELS.map(([k, n]) => `<div class="ur-stat"><span>${n}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div></div>` : ''}</section>`;
   }
 
   // ---- ARAŞTIRMA ----
@@ -373,35 +305,27 @@ export function mountYonetim(root, { realm = 0 } = {}) {
         <div class="ur-box">${kv('Günlük üretim değeri', money(c.research.outputDay * (resPrice || 0)))}${kv('Bilimin günlük katkısı', money(s.sectors.cto), 'c-up', true)}</div></section>`;
   }
 
-  // ---- ŞİRKET ----
-  // Nakit ve bono: vergiyi (muhasebe ücreti) ve CFO'nun değerini belirler. Banka seviyesi Üretim › Kurulum › Diğer binalar'dan gelir.
-  function financeCard(s) {
+  // ---- SATIŞ ----
+  function viewSatis(s) {
     const c = company;
-    return `<section class="ur-card" aria-labelledby="h-fin"><h2 id="h-fin">Nakit ve bono</h2>
-        <p class="ur-sub">Vergi (muhasebe ücreti) ve muhasebecinin (CFO) kazandırdığı için.</p>
-        ${field('Nakit', 'finance.cash', inVal(c.finance.cash), { unit: '$', mode: 'numeric', hint: 'Oyunun sağ üstündeki yeşil tutar; tipik gün sonu nakdiniz.' })}
-        <div class="ur-grid2">${field('Alınan bono', 'finance.bondsBought', inVal(c.finance.bondsBought), { unit: '$', mode: 'numeric' })}${field('İhraç edilen bono', 'finance.bondsIssued', inVal(c.finance.bondsIssued), { unit: '$', mode: 'numeric' })}</div>
-        <div class="ur-box">${kv('Banka seviyesi', `${num(c.finance.bankLevel)} <span class="c-muted">(Üretim › Kurulum)</span>`)}
-          ${kv('Vergilenen varlık', money(s.tax.assets))}${kv('Vergilendirme başlangıcı', money(s.tax.threshold))}
-          ${kv('Günlük vergi', money(s.tax.day), 'c-price')}${kv('Yöneticisiz olsaydı', money(s.tax.withoutDay))}${kv('Muhasebenin günlük katkısı', money(s.sectors.cfo), 'c-up', true)}
-          <p class="ur-note">Vergi kademeli: eşiğin üstüne %0,5; +3M, +6M, +9M'de %0,5 daha, +12M'de %1 daha.</p></div></section>`;
-  }
-  function viewSirket(s) {
-    const c = company;
-    const b = s.bases;
-    return `<section class="ur-card" aria-labelledby="h-adm"><h2 id="h-adm">Yönetim gideri</h2>
-        <p class="ur-sub">Yönetimin (COO) maaş tasarrufu için. İleride Üretim ve Perakende binalarınızdan otomatik gelecek.</p>
-        ${field('Toplam bina seviyesi', 'admin.totalLevels', inVal(c.admin.totalLevels), { mode: 'numeric', hint: 'Rekreasyon binaları hariç bütün binaların seviyeleri toplamı.' })}
-        ${field('Günlük toplam maaş', 'admin.wagesDay', inVal(c.admin.wagesDay), { unit: '$', mode: 'numeric', hint: 'Bütün binaların günlük maaşı, yönetim gideri dahil (oyunda ödediğiniz).' })}
-        <div class="ur-box">${kv('Brüt yönetim gideri', `%${NF[2].format(b.gross * 100)}`)}${kv('Ekibin tasarrufu', `%${num(s.team.adminSavingsPct)}`)}
-          ${kv('Yönetim gidersiz maaş', money(b.wageBaseDay))}${kv('Yönetimin günlük katkısı', money(s.sectors.coo), 'c-up', true)}</div></section>
-      <section class="ur-card" aria-labelledby="h-ret"><h2 id="h-ret">Perakende</h2>
+    return `<section class="ur-card" aria-labelledby="h-ret"><h2 id="h-ret">Perakende</h2>
         <p class="ur-sub">İletişimin (CMO) satış hızı katkısı için. Satış hızı arttıkça aynı sürede daha çok ürün satılır.</p>
         ${field('Günlük perakende marjı', 'retail.marginDay', inVal(c.retail.marginDay), { unit: '$', hint: 'Mağaza ve restoranlarınızda günlük satış geliri − satılan malın maliyeti (maaşlar hariç), şu anki ekiple.' })}
         ${field('Ekip dışı satış hızı bonusu', 'retail.otherSpeedPct', inVal(c.retail.otherSpeedPct), { unit: '%', hint: 'Oyundaki toplam satış hızından ekibin payı çıkınca kalan. Bilmiyorsanız 0.' })}
         <div class="ur-box">${kv('Ekibin satış hızı', `+%${num(s.team.salesSpeedPct)}`)}${kv('Restoran derecesi', `+${NF[3].format(s.team.restaurantRating)}`)}
           ${kv('İletişimin günlük katkısı', money(s.sectors.cmo), 'c-up', true)}
           <p class="ur-note">Satacak mal yeterliyse geçerli. Restoran derecesinin fiyata etkisi paraya çevrilmedi.</p></div></section>`;
+  }
+
+  // ---- ŞİRKET ----
+  function viewSirket(s) {
+    const c = company;
+    return `<section class="ur-card" aria-labelledby="h-adm"><h2 id="h-adm">Yönetim gideri</h2>
+        <p class="ur-sub">Yönetimin (COO) maaş tasarrufu için. İleride Üretim ve Perakende binalarınızdan otomatik gelecek.</p>
+        ${field('Toplam bina seviyesi', 'admin.totalLevels', inVal(c.admin.totalLevels), { mode: 'numeric', hint: 'Rekreasyon binaları hariç bütün binaların seviyeleri toplamı.' })}
+        ${field('Günlük toplam maaş', 'admin.wagesDay', inVal(c.admin.wagesDay), { unit: '$', mode: 'numeric', hint: 'Bütün binaların günlük maaşı, yönetim gideri dahil (oyunda ödediğiniz).' })}
+        <div class="ur-box">${kv('Brüt yönetim gideri', `%${NF[2].format(s.bases.gross * 100)}`)}${kv('Ekibin tasarrufu', `%${num(s.team.adminSavingsPct)}`)}
+          ${kv('Yönetim gidersiz maaş', money(s.bases.wageBaseDay))}${kv('Yönetimin günlük katkısı', money(s.sectors.coo), 'c-up', true)}</div></section>`;
   }
 
   // ---- olaylar ----
@@ -523,7 +447,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     const [head, sub] = location.hash.slice(1).split('/');
     if (head !== 'yonetim') return;
     flushTyping();
-    const next = TABS.some(([k]) => k === sub) ? sub : 'ozet';
+    const next = TABS.some(([k]) => k === sub) ? sub : 'ekip';
     if (next === tab) return;
     tab = next;
     draft = null; api = null;
