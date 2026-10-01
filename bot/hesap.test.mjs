@@ -580,14 +580,108 @@ test('Tüm şirket kapsamında kişi başı değer, kapsamla orantılı büyür'
 });
 
 // =====================================================================================================
-section('Yaklaşık (eğri ve çıkarım)');
-test('Eğitimi biten CFO ile 66,75 puan → %63 (oyunun Kâr hesaplayıcısındaki $32,07\'den çıkarım)', () => {
+section('Oyun · Yönetici etkileri, eğri ve vergi');
+// Etkili beceri: oyun rehberi (60 üstü yarım, 80 üstü çeyrek) ve oyunun kendi grafiğindeki noktalar
+test('Oyunun grafiği: 40→40, 47→47, 61→60,5, 68→64, 75→67,5, 82→70,5, 89→72,25, 96→74', () => {
+  eq([40, 47, 61, 68, 75, 82, 89, 96].map(H.effectiveSkillShown), [40, 47, 60.5, 64, 67.5, 70.5, 72.25, 74]);
+});
+test('Oyun: "Etkili yetenek 64, 69\'dan düşürüldü" (Dentium, yönetim 69,75)', () => {
+  eq([H.effectiveSkillShown(69.75), H.effectiveSkill(69.75)], [64.5, 64]);
+});
+test('Rehber grafiği: 150 puan → 87,5', () => { near(H.effectiveSkillRaw(150), 87.5, 9); });
+test('Cooper (170 seviye, brüt %99,4): yönetim 0/60/61/62/70 → tasarruf %0/60/60/61/65', () => {
+  eq([0, 60, 61, 62, 70].map(H.managementSavingsPct), [0, 60, 60, 61, 65]);
+});
+test('Eğitimi biten CFO ile 66,75 puan → %63 (oyunun Kâr hesaplayıcısındaki $32,07\'den)', () => {
   eq(H.managementSavingsPct(66.75), 63);
 });
-test('Eğri 60 puana kadar puanın kendisi, üstünde azalan getiri, tavan %82', () => {
-  eq([H.managementSavingsPct(45), H.managementSavingsPct(60)], [45, 60]);
-  ok(H.managementSavingsPct(70) - 60 < 10, '60 üstünde azalmalı');
-  ok(H.managementSavingsPct(1000) <= 82, 'tavan');
+test('Tasarruf en çok %100', () => { eq(H.managementSavingsPct(10000), 100); });
+
+const NTL = execs([
+  ['Isabella Patterson', 'y', 2039, 23, 8, 18, 7], ['Kim Weissmuller', 'x', 65000, 8, 35, 8, 7],
+  ['Linda Bailey', '1', 1991, 5, 4, 4, 3, false], ['Preston James', 'f', 16650, 25, 25, 7, 11],
+  ['Frank Peterson', 't', 15000, 31, 11, 19, 13], ['Jonathan Cox', 'o', 135000, 50, 14, 13, 13],
+  ['Elizabeth Wilson', 'm', 350000, 7, 8, 51, 14], ['Barbara Howard', 'v', 386250, 49, 8, 7, 9],
+]);
+const SFENX = execs([
+  ['Kendrick Watson', 'f', 2027, 18, 27, 13, 20], ['Ryan Gonzales', 'z', 7500, 9, 13, 20, 40],
+  ['Kennedy Watson', 'o', 15000, 20, 10, 7, 15], ['Jack Cook', '2', 1194, 5, 7, 6, 16, false],
+  ['Megan White', '3', 1347, 8, 5, 5, 5, false], ['Jay More', 'v', 14250, 34, 9, 7, 9],
+  ['Zeynep Yılmaz', '1', 1544, 9, 9, 13, 12, false], ['Zayan Saxena', 'x', 2312, 4, 5, 4, 5],
+  ['Aisha Ross', 'y', 1132, 7, 20, 26, 12], ['Chloe Griffin', 'm', 1406, 8, 9, 8, 26],
+  ['Brandon Henderson', 't', 13000, 7, 5, 4, 42],
+]);
+const ATLAS = execs([
+  ['Aaron Watson', 'x', 13000, 8, 13, 30, 13], ['Derek Parker', '3', 2800, 7, 10, 18, 8, false],
+  ['Maurice Torres', 'o', 290000, 57, 15, 7, 6], ['Zion Turner', 'v', 3200, 33, 10, 15, 17],
+  ['Sung Bae', 'm', 112500, 4, 9, 45, 4], ['Scott Lewis', 'y', 13000, 5, 5, 32, 7],
+  ['Diamond Anderson', '2', 2800, 4, 1, 16, 1, false], ['Mitsuo Nadi', 'f', 15000, 6, 35, 8, 2],
+]);
+const DENTIUM = execs([
+  ['Marie Flores', 'o', 225000, 50, 10, 17, 9], ['Ann Edwards', 'm', 2323, 12, 6, 5, 4, false],
+  ['Nicholas Cook', 't', 7500, 26, 4, 3, 18], ['Matthew Watson', 'v', 60000, 24, 5, 6, 7],
+  ['Sandra Johnson', '1', 1399, 4, 5, 4, 4, false], ['Gloria Cook', 'f', 1993, 5, 13, 5, 6],
+  ['Sota Hara', 'x', 2103, 5, 8, 4, 4, false],
+]);
+// [ekip, banka, tasarruf %, eşik artışı, satış %, restoran, araştırma %, patent, maaş] — oyunun "Ekibinizin etkisi"
+const EFFECTS = [
+  ['Dr. Mesar', mesar, 0, 73, 6.5e6, 4, 0.12, 12, 0.38, 466582],
+  ['NothingToLose', NTL, 27, 72, 92.5e6, 21, 0.64, 44, 1.38, 971930],
+  ['Dentium', DENTIUM, 0, 64, 8.0e6, 2, 0.06, 42, 1.31, 300318],
+  ['SFENX', SFENX, 22, 45, 56.0e6, 9, 0.27, 136, 4.25, 60712],
+  ['ATLAS', ATLAS, 0, 68, 23.5e6, 20, 0.62, 6, 0.19, 452300],
+];
+for (const [name, team, bank, adm, lift, sales, rest, research, patent, salary] of EFFECTS) {
+  test(`${name}: yönetim %${adm}, vergi +$${lift / 1e6}M, satış +%${sales}, restoran +${rest}, araştırma %${research}, patent +${patent}`, () => {
+    const t = H.teamEffects(team, { bankLevel: bank });
+    eq([t.adminSavingsPct, t.thresholdLift, t.salesSpeedPct, t.researchSpeedPct], [adm, lift, sales, research]);
+    near(t.restaurantRating, rest, 3);
+    near(t.patentPct, patent, 2);
+    eq(team.reduce((x, e) => x + e.salary, 0), salary);
+  });
+}
+test('Oyun tasarruf oranları: NTL 187,62÷260,59, Dentium 122,35÷191,18, SFENX 42,88÷95,29, ATLAS 88,40÷130', () => {
+  eq([187.62 / 260.59, 122.35 / 191.18, 42.88 / 95.29, 88.4 / 130].map((x) => Math.round(x * 100)), [72, 64, 45, 68]);
+});
+test('Banka: seviye 10 muhasebeyi ikiye, 20 üçe katlar; en çok 40', () => {
+  const one = [{ position: 'f', skills: { coo: 0, cfo: 10, cmo: 0, cto: 0 } }];
+  eq([0, 10, 20, 99].map((b) => H.teamEffects(one, { bankLevel: b }).thresholdLift), [5e6, 10e6, 15e6, 25e6]);
+});
+// Vergi: oyun rehberindeki örnekler
+test('Vergi rehberi: 5M varlık, eşik 3M → $10.000; 2M → 0', () => {
+  eq([H.accountingOverheadDay(5e6, 3e6), H.accountingOverheadDay(2e6, 3e6)], [10000, 0]);
+});
+test('Vergi rehberi: 11M varlık, eşik 3M → 40k + 25k + 10k = $75.000', () => { near(H.accountingOverheadDay(11e6, 3e6), 75000, 6); });
+test('Vergi rehberi: 22M varlık → eşik 3M $360.000, eşik 9M $180.000', () => {
+  near(H.accountingOverheadDay(22e6, 3e6), 360000, 6);
+  near(H.accountingOverheadDay(22e6, 9e6), 180000, 6);
+});
+test('Vergilenen varlık = nakit + alınan tahvil − ihraç edilen (rehber: 3M + 3M − 1M = 5M)', () => {
+  eq(H.assessableAssets({ cash: 3e6, bondsBought: 3e6, bondsIssued: 1e6 }), 5e6);
+});
+test('CFO değeri: Dentium, $4,49M nakit → yöneticisiz vergi $7.466, eşik $11M ile 0; Gloria ayrılsa eşik $4,5M, yine 0', () => {
+  const setup = { ...myCompany(), executives: DENTIUM, finance: { cash: 4493226 } };
+  const a = H.executiveAnalysis(setup, DATA, plan(setup));
+  near(a.taxWithoutDay, 7466.13, 2);
+  eq([a.taxDay, a.threshold], [0, 11e6]);
+  near(a.teamCfoValueDay, 7466.13, 2);
+  const gloria = a.members.find((m) => m.name === 'Gloria Cook');
+  eq(gloria.cfoValueDay, 0); // diğerlerinin 3 muhasebe puanı eşiği $4,5M'ye çıkarır, nakit ($4,49M) altında kalır
+  near(a.teamValueDay, a.teamCooValueDay + a.teamCfoValueDay, 6);
+});
+test('CFO değeri: nakit yoksa vergi değeri 0; eğitimdeki muhasebe stajyeri başlayınca kazanç hesaplanır', () => {
+  const setup = { ...myCompany(), executives: DENTIUM, finance: { cash: 30e6 } };
+  const a = H.executiveAnalysis(setup, DATA, plan(setup));
+  const sota = a.members.find((m) => m.name === 'Sota Hara');
+  ok(sota.ifActiveValueDay > 0, 'stajyer başlayınca eşik yükselir, vergi düşer');
+  const none = H.executiveAnalysis({ ...setup, finance: {} }, DATA, plan(setup));
+  eq(none.teamCfoValueDay, 0);
+});
+test('İletişim ve bilim paraya çevrilmez, ayrılırsa kaybedilecek etki gösterilir (NTL: Elizabeth Wilson)', () => {
+  const setup = { ...myCompany(), executives: NTL };
+  const a = H.executiveAnalysis(setup, DATA, plan(setup));
+  const el = a.members.find((m) => m.name === 'Elizabeth Wilson');
+  ok(el.effects.salesSpeedPct >= 15, `satış hızı kaybı büyük olmalı: ${el.effects.salesSpeedPct}`);
 });
 
 // ---- rapor ----
