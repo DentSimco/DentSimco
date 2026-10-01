@@ -132,9 +132,11 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toastHost.innerHTML = ''; }, 3200);
   }
-  function commit(next, { soft = false } = {}) {
+  // silent: yazarken yalnız kaydeder; ekranı yeniden çizmez (klavye ve imleç kaybolmasın). Sonuçlar kutudan çıkınca yenilenir.
+  function commit(next, { soft = false, silent = false } = {}) {
     company = Y.sanitizeCompany(next);
     if (!saveCompany(r, company)) toast('Tarayıcı kaydı açık değil; değişiklikler sayfa kapanınca kaybolur.');
+    if (silent) return;
     ensureVwap();
     if (soft) softRender(); else render();
   }
@@ -268,6 +270,16 @@ export function mountYonetim(root, { realm = 0 } = {}) {
         <a class="ur-btn primary" href="#yonetim/ekip">${icon('plus')}Yöneticileri gir</a></section>`;
     }
     const sec = SECTOR_LABELS.map(([k, n, d]) => kv(`${n} <span class="c-muted">(${d})</span>`, money(s.sectors[k]))).join('');
+    // Oyundaki gibi: brüt − tasarruf puanı = net; altında tasarruf yüzdesi
+    const grossPct = s.bases.gross * 100;
+    const savePct = Math.min(100, s.team.adminSavingsPct);
+    const savedPts = grossPct * savePct / 100;
+    const adminCard = s.company.admin.totalLevels > 0 ? `<section class="ur-card" aria-labelledby="h-adm"><h2 id="h-adm">Yönetim gideri</h2>
+        <p class="ur-sub">Toplam bina seviyesi ${num(s.company.admin.totalLevels)}. Oyundaki "Yönetim giderleri" satırıyla aynı.</p>
+        <div class="ur-box">${kv('Brüt yönetim gideri', `%${NF[2].format(grossPct)} − ${NF[2].format(savedPts)}`)}
+          ${kv('Net yönetim gideri', `%${NF[2].format(grossPct - savedPts)}`, '', true)}
+          ${kv('Yönetim tasarrufu', `%${NF[0].format(savePct)}`, savePct > 0 ? 'c-up' : '', true)}
+          ${s.sectors.coo > 0 ? kv('Günlük kazancı', money(s.sectors.coo), 'c-up') : ''}</div></section>` : '';
     const members = [...s.members].sort((a, b) => (b.active - a.active) || (b.netDay - a.netDay));
     return `${migratedNote}
       <section class="ur-card" aria-labelledby="h-sum"><h2 id="h-sum">Yöneticiler ne kazandırıyor</h2>
@@ -277,6 +289,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
           ${kv('Net getiri', money(s.netDay, 0, true), cls(s.netDay), true)}</div>
         ${s.upgradeSaving > 0 ? `<div class="ur-box">${kv('Kalite planında tek seferlik tasarruf', money(s.upgradeSaving), 'c-up', true)}<p class="ur-note">Bilim puanınız patent olasılığını yükselttiği için gereken araştırma azalır (Araştırma bölümündeki plan).</p></div>` : ''}
         ${missingNotes(s)}</section>
+      ${adminCard}
       <section class="ur-card" aria-labelledby="h-fx"><h2 id="h-fx">Ekibinizin etkisi</h2>
         <p class="ur-sub">Oyundaki "Ekibinizin etkisi" ekranıyla aynı; yalnız aktif yöneticiler.</p>${effectsBox(s.team)}</section>
       <section class="ur-card" aria-labelledby="h-mem"><h2 id="h-mem">Kişi başı</h2>
@@ -368,7 +381,6 @@ export function mountYonetim(root, { realm = 0 } = {}) {
         ${field('Günlük araştırma üretimi (şu an)', 'research.outputDay', inVal(c.research.outputDay), { unit: 'adet', mode: 'numeric', hint: 'Bütün araştırma binalarınızın şu anki toplamı.' })}
         ${field('Birim fiyat', 'research.price', c.research.price != null ? dec(c.research.price) : '', { unit: '$', placeholder: resMarket?.price != null ? NF[2].format(resMarket.price) : '', hint: 'Boş bırakırsanız borsadan alınır.' })}
         <div class="ur-chips">${priceTag(c.research.price, resMarket)}</div>
-        ${field('Ekip dışı hız bonusu', 'research.otherSpeedPct', inVal(c.research.otherSpeedPct), { unit: '%', hint: 'Rekreasyon, olay gibi yöneticiler dışındaki bonuslar. Bilmiyorsanız 0.' })}
         <div class="ur-box">${kv('Günlük üretim değeri', money(c.research.outputDay * (resPrice || 0)))}${kv('Bilimin günlük katkısı', money(s.sectors.cto), 'c-up', true)}</div></section>`;
   }
 
@@ -458,8 +470,8 @@ export function mountYonetim(root, { realm = 0 } = {}) {
     const [a, b] = path.split('.');
     return b ? { ...obj, [a]: { ...obj[a], [b]: value } } : { ...obj, [a]: value };
   }
-  function onChange(ev) {
-    const t = ev.target;
+  // Alan değerini şirket kaydına işler. Değişen bir şey yoksa null döner.
+  function applyField(t) {
     if (t.dataset.f) {
       const path = t.dataset.f;
       const raw = t.value;
@@ -467,7 +479,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
       if (t.tagName === 'SELECT') value = raw === '' ? null : Number(raw);
       else if (path === 'research.price') value = raw.trim() === '' ? null : parseNum(raw);
       else value = parseNum(raw) ?? 0;
-      return commit(setPath(company, path, value), { soft: true });
+      return setPath(company, path, value);
     }
     if (t.dataset.u) {
       const [i, k] = t.dataset.u.split('.');
@@ -477,11 +489,37 @@ export function mountYonetim(root, { realm = 0 } = {}) {
       else if (k === 'price') value = raw.trim() === '' ? null : parseNum(raw);
       else value = parseNum(raw) ?? 0;
       const upgrades = company.research.upgrades.map((u, j) => (j === Number(i) ? { ...u, [k]: value } : u));
-      return commit({ ...company, research: { ...company.research, upgrades } }, { soft: true });
+      return { ...company, research: { ...company.research, upgrades } };
     }
+    return null;
+  }
+  // Yazarken kaydet: her tuşta kısa gecikmeyle işlenir; kutudan çıkmak ya da sekme değiştirmek gerekmez.
+  let typeTimer = null;
+  let typeTarget = null;
+  function flushTyping() {
+    clearTimeout(typeTimer);
+    typeTimer = null;
+    const t = typeTarget;
+    typeTarget = null;
+    if (!t || destroyed || !t.isConnected) return;
+    const next = applyField(t);
+    if (next) commit(next, { silent: true });
+  }
+  function onChange(ev) {
+    const t = ev.target;
+    if (!(t.dataset.f || t.dataset.u)) return;
+    clearTimeout(typeTimer); typeTimer = null; typeTarget = null;
+    const next = applyField(t);
+    if (next) commit(next, { soft: true });
   }
   function onInput(ev) {
     const t = ev.target;
+    if ((t.dataset.f || t.dataset.u) && t.tagName !== 'SELECT') {
+      typeTarget = t;
+      clearTimeout(typeTimer);
+      typeTimer = setTimeout(flushTyping, 350);
+      return;
+    }
     if (!t.dataset.d || !draft) return;
     const k = t.dataset.d;
     if (k === 'name') draft.e.name = t.value;
@@ -491,6 +529,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
   function onHash() {
     const [head, sub] = location.hash.slice(1).split('/');
     if (head !== 'yonetim') return;
+    flushTyping();
     const next = TABS.some(([k]) => k === sub) ? sub : 'ozet';
     if (next === tab) return;
     tab = next;
@@ -518,6 +557,7 @@ export function mountYonetim(root, { realm = 0 } = {}) {
       load();
     },
     destroy() {
+      flushTyping();
       destroyed = true;
       clearTimeout(toastTimer); clearTimeout(settleTimer);
       root.removeEventListener('click', onClick);
