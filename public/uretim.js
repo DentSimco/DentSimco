@@ -60,6 +60,7 @@ function defaultSetup() {
     v: 1, buildings: [], recreation: { park: 0, temple: 0, lake: 0 }, extraBonusPct: 0, economyPhase: 0,
     academyLevel: 0, otherLevels: 0, otherWagesDay: 0,
     admin: { mode: 'savings', savingsPct: 0, netPct: 0 }, executives: [], events: {},
+    finance: { cash: 0, bondsBought: 0, bondsIssued: 0, bankLevel: 0 },
     substitution: true, buyPolicy: 'cheapest',
     prices: {}, contractPrices: {}, keep: {}, buyQuality: {}, transportPrice: null,
   };
@@ -70,6 +71,8 @@ function sanitizeSetup(raw) {
   const s = { ...base, ...raw };
   s.recreation = { ...base.recreation, ...(raw.recreation || {}) };
   s.admin = { ...base.admin, ...(raw.admin || {}) };
+  s.finance = Object.fromEntries(Object.entries({ ...base.finance, ...(raw.finance || {}) }).map(([k, v]) => [k, Math.max(0, Number(v) || 0)]));
+  s.finance.bankLevel = H.clampBankLevel(s.finance.bankLevel);
   s.events = { ...(raw.events || {}) };
   for (const k of ['prices', 'contractPrices', 'keep', 'buyQuality']) s[k] = raw[k] && typeof raw[k] === 'object' ? { ...raw[k] } : {};
   s.transportPrice = Number.isFinite(Number(raw.transportPrice)) && raw.transportPrice !== null && raw.transportPrice !== '' ? Number(raw.transportPrice) : null;
@@ -507,15 +510,16 @@ export function mountUretim(root, { realm = 0 } = {}) {
     if (setup.executives.length) {
       const a = H.executiveAnalysis(setup, data, plan, { scope: execScope });
       const rowsE = a.members.map((mm) => `<div class="ur-line"><div class="grow"><div class="title ${mm.active ? '' : 'c-muted'}">${esc(mm.name || positionName(mm.position))}</div>
-          <div class="ur-row" style="gap:6px;margin-top:2px">${chip(positionName(mm.position), mm.active ? '' : 'muted')}<span class="ur-note">${mm.active ? `net ${m(mm.netDay, true)}` : `maaş ${m(mm.salary)}`}</span></div></div>
+          <div class="ur-row" style="gap:6px;margin-top:2px">${chip(positionName(mm.position), mm.active ? '' : 'muted')}<span class="ur-note">${mm.active ? `net ${m(mm.netDay, true)}` : `maaş ${m(mm.salary)}`}</span></div>${mm.active ? memberDetail(mm, m) : ''}</div>
         <div style="text-align:right">${mm.active ? `<div class="c-up" style="font-weight:600;font-variant-numeric:tabular-nums">${m(mm.valueDay, true)}</div><span class="ur-note">maaş ${m(mm.salary)}${mm.ratio != null ? ` · ${num(mm.ratio, 1)} kat` : ''}</span>`
     : `<div class="c-muted" style="font-weight:600">Eğitimde</div><span class="ur-note">başlayınca ${m(mm.ifActiveValueDay || 0, true)}</span>`}</div></div>`).join('');
       execs = `<section class="ur-card" aria-labelledby="h-ex2"><h2 id="h-ex2">Yöneticiler ne kazandırıyor (${periodName})</h2>
         ${seg('execScope', [['plan', 'Bu plan'], ['company', 'Tüm şirket']], execScope, 'Kapsam')}
         ${execScope === 'company' && !setup.otherWagesDay ? '<p class="ur-note">Tüm şirket için Kurulum › Yönetim gideri kartına planda olmayan binaların günlük maaşını girin; şimdilik yalnız plan hesaplanıyor.</p>' : ''}
-        <div class="ur-box">${kv('Yöneticilerin kazandırdığı', m(a.teamValueDay))}${kv('Yönetici maaşları', m(a.salariesDay))}${kv('Net getiri', m(a.teamNetDay, true), cls(a.teamNetDay), true)}</div>
+        <div class="ur-box">${kv('Yönetim (maaş tasarrufu)', m(a.teamCooValueDay))}${kv('Muhasebe (ödenmeyen vergi)', m(a.teamCfoValueDay))}${kv('Yöneticilerin kazandırdığı', m(a.teamValueDay), '', true)}${kv('Yönetici maaşları', m(a.salariesDay))}${kv('Net getiri', m(a.teamNetDay, true), cls(a.teamNetDay), true)}</div>
         <div>${rowsE}</div>
-        <p class="ur-note">Kişi başı değer, yönetici bugün ayrılsa kaybedilecek maaş tasarrufudur. Takım toplamı oyundaki tasarruf oranına dayanır; kişi başı değerler yaklaşık (±1 puan).</p></section>`;
+        <p class="ur-note">Kişi başı değer, yönetici bugün ayrılsa kaybedilecek paradır: yönetimde maaş tasarrufu, muhasebede ödenmeyen vergi. İletişim ve bilim paraya çevrilmez, ayrılırsa kaybedilecek etki yazılır. Azalan getiri yüzünden kişi başı değerlerin toplamı takım toplamına eşit olmayabilir.</p>
+        ${!a.assets ? '<p class="ur-note">Muhasebenin vergi değeri için Kurulum › Nakit, tahvil ve banka kartını doldurun.</p>' : ''}</section>`;
     }
     const manualCount = Object.keys(setup.prices || {}).length + Object.keys(setup.contractPrices || {}).length + (setup.transportPrice != null ? 1 : 0);
     const evs = activeEvents().filter((e) => setup.events?.[e.product] !== false && setup.buildings.some((b) => b.product === e.product));
@@ -523,7 +527,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
       live ? `Borsa fiyatları ${ago(live.t)} güncellendi.` : 'Borsa fiyatları okunamadı; fiyatları elle girin.',
       manualCount ? `${manualCount} fiyat elle girildi.` : 'Bütün fiyatlar borsadan.',
       `Ekonomi fazı: ${H.ECONOMY_PHASES[setup.economyPhase]}.${evs.length ? ` Etkin olay: ${evs.map((e) => `${nameOf(e.product)} ${e.pct > 0 ? '+' : '−'}%${Math.abs(e.pct)}`).join(', ')}.` : ''}`,
-      'Vergi ve muhasebe ücreti kâra dahil değil; oyunda vergi, sahip olunan nakde bağlıdır.',
+      'Vergi (muhasebe ücreti) kâra dahil değil; nakde bağlıdır. Kurulum › Nakit kartından günlük vergi ve muhasebecinin değeri görülür.',
       ...plan.warnings.map((w) => w.text),
     ];
     return `
@@ -563,7 +567,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const modeField = mode === 'net'
       ? field('Net yönetim gideri', 'admin.netPct', num(setup.admin.netPct, 2), { unit: '%', hint: 'Oyunun üretim hesaplayıcısında yazan yüzde.' })
       : mode === 'executives'
-        ? `<div class="ur-box">${kv('Ekip puanından tasarruf', `≈ %${H.managementSavingsPct(H.teamScores(setup.executives).coo)}`, 'c-price', true)}<p class="ur-note">Yöneticiler kartındaki aktif yöneticilerden hesaplanır. Yaklaşıktır (±1 puan).</p></div>`
+        ? `<div class="ur-box">${kv('Ekip puanından tasarruf', `%${H.managementSavingsPct(H.teamScores(setup.executives).coo)}`, 'c-price', true)}<p class="ur-note">Yöneticiler kartındaki aktif yöneticilerden, oyunun formülüyle hesaplanır.</p></div>`
         : field('Yönetici tasarrufu', 'admin.savingsPct', num(setup.admin.savingsPct, fin(setup.admin.savingsPct) && setup.admin.savingsPct % 1 ? 2 : 0), { unit: '%', hint: 'Oyunun yönetim sayfasında: tasarruf ÷ yönetim gideri (örneğin 118,53 ÷ 191,18 = %62).' });
     return `
       <div class="ur-head"><div><h1>Realm ${r + 1} kurulumu</h1><p class="ur-sub">Bu tarayıcıda saklanır.</p></div>
@@ -597,6 +601,7 @@ export function mountUretim(root, { realm = 0 } = {}) {
         ${kv('Net yönetim gideri', pctText(a.net), 'c-price', true)}</section>
 
       ${cardExecutives(plan)}
+      ${cardFinance(plan)}
       ${cardEvents()}
 
       <section class="ur-card" aria-labelledby="h-gen"><h2 id="h-gen">Genel</h2>
@@ -605,6 +610,46 @@ export function mountUretim(root, { realm = 0 } = {}) {
         <div class="ur-hr"></div>
         <button type="button" class="ur-btn danger" data-act="reset">${icon('trash')}Bu kurulumu sıfırla</button>
         <p class="ur-note">Realm ${r + 1} kurulumunu bu tarayıcıdan siler. Önce Kopyala ile yedek alabilirsiniz.</p></section>`;
+  }
+
+  // Özet'te kişi satırının altı: para kırılımı ve paraya çevrilmeyen etkiler
+  function memberDetail(mm, m) {
+    const parts = [];
+    if (mm.cooValueDay > 0) parts.push(`yönetim ${m(mm.cooValueDay)}`);
+    if (mm.cfoValueDay > 0) parts.push(`vergi ${m(mm.cfoValueDay)}`);
+    const e = mm.effects || {};
+    if (e.salesSpeedPct > 0) parts.push(`satış hızı +%${num(e.salesSpeedPct)}`);
+    if (e.researchSpeedPct > 0) parts.push(`araştırma +%${num(e.researchSpeedPct)}`);
+    return parts.length ? `<div class="ur-note" style="margin-top:2px">${parts.join(' · ')}</div>` : '';
+  }
+
+  // Oyunun "Ekibinizin etkisi" satırlarıyla aynı düzen; oyundaki ekranla karşılaştırmak için.
+  function teamEffectsBox(t) {
+    const cut = SKILL_LABELS.filter(([k]) => t.scores[k] >= 61)
+      .map(([k, n]) => `${n} ${num(Math.floor(t.scores[k]))} → ${num(t.shown[k], t.shown[k] % 1 === 0 ? 0 : (t.shown[k] * 10) % 1 === 0 ? 1 : 2)}`);
+    const mln = (x) => `$${NF[1].format(x / 1e6)}M`;
+    return `<div class="ur-hr" style="margin:8px 0 4px"></div><span class="ur-note" style="font-weight:600">Ekibinizin etkisi (oyundaki gibi)</span>
+      ${kv('Yönetim gideri tasarrufu', `%${num(t.adminSavingsPct)}`, 'c-price')}
+      ${kv('Vergilendirme başlangıcı', `$3M +${mln(t.thresholdLift)}`, 'c-price')}
+      ${kv('Satış hızı', `+%${num(t.salesSpeedPct)}`)}${kv('Restoran derecesi', `+${NF[3].format(t.restaurantRating)}`)}
+      ${kv('Patent olasılığı', `%${NF[2].format(H.PATENT_BASE_PCT)} +%${NF[2].format(t.patentPct)}`)}${kv('Araştırma üretim hızı artışı', `%${NF[1].format(t.researchSpeedPct)}`)}
+      ${cut.length ? `<p class="ur-note" style="margin-top:6px">60 üstünde azalan getiri: ${cut.join(', ')} (oyun tam sayı kısmını uygular).</p>` : ''}
+      ${t.bankLevel ? `<p class="ur-note">Banka seviyesi ${num(t.bankLevel)}: muhasebe puanı başı ${money(t.thresholdPerPoint)}.</p>` : ''}
+      <p class="ur-note">Oyundaki taban değerler (satış hızı, restoran) ekip dışından gelir, burada yalnız ekibin katkısı var.</p>`;
+  }
+
+  function cardFinance(plan) {
+    const f = setup.finance;
+    const a = H.executiveAnalysis(setup, data, plan);
+    return `<section class="ur-card" aria-labelledby="h-fin"><h2 id="h-fin">Nakit, tahvil ve banka</h2>
+      <p class="ur-sub">Vergi (muhasebe ücreti) ve muhasebecinin kazandırdığını hesaplamak için. Kâr tablosunu değiştirmez.</p>
+      ${field('Nakit', 'finance.cash', num(f.cash), { unit: '$', mode: 'numeric', hint: 'Oyunun sağ üstündeki yeşil tutar. Gün içinde değişir; tipik gün sonu nakdinizi girebilirsiniz.' })}
+      <div class="ur-grid2">${field('Alınan tahvil', 'finance.bondsBought', num(f.bondsBought), { unit: '$', mode: 'numeric' })}${field('İhraç edilen tahvil', 'finance.bondsIssued', num(f.bondsIssued), { unit: '$', mode: 'numeric' })}</div>
+      ${field('Banka seviyesi', 'finance.bankLevel', num(f.bankLevel), { mode: 'numeric', hint: 'Bankanız yoksa 0. Seviye başı, muhasebe puanı başı +$50k eşik (en çok 40).' })}
+      <div class="ur-hr"></div>
+      ${kv('Vergilenen varlık', money(a.assets))}${kv('Vergilendirme başlangıcı', money(a.threshold))}
+      ${kv('Günlük vergi', money(a.taxDay), 'c-price', true)}${kv('Yöneticisiz olsaydı', money(a.taxWithoutDay))}
+      <p class="ur-note">Vergi kademeli: eşiğin üstündeki tutara %0,5; eşik +3M, +6M, +9M'den sonra her kademede %0,5 daha, +12M'den sonra %1 daha eklenir.</p></section>`;
   }
 
   function cardExecutives(plan) {
@@ -624,17 +669,18 @@ export function mountUretim(root, { realm = 0 } = {}) {
       const pending = inPlan.members.filter((m) => !m.active && m.ifActiveValueDay > 0);
       summary = `<div class="ur-box">
         <span class="ur-note" style="font-weight:600">Bu plandaki binalar için, günlük</span>
-        ${kv('Yöneticilerin kazandırdığı', money(inPlan.teamValueDay))}${kv('Yönetici maaşları', money(inPlan.salariesDay))}
+        ${kv('Yönetim (maaş tasarrufu)', money(inPlan.teamCooValueDay))}${kv('Muhasebe (ödenmeyen vergi)', money(inPlan.teamCfoValueDay))}
+        ${kv('Yöneticilerin kazandırdığı', money(inPlan.teamValueDay), '', true)}${kv('Yönetici maaşları', money(inPlan.salariesDay))}
         ${kv('Net getiri', money(inPlan.teamNetDay, 0, true), inPlan.teamNetDay >= 0 ? 'c-up' : 'c-down', true)}
         ${setup.otherWagesDay > 0 ? `<div class="ur-hr"></div><span class="ur-note" style="font-weight:600">Tüm şirket için, günlük</span>
           ${kv('Yöneticilerin kazandırdığı', money(company.teamValueDay))}${kv('Net getiri', money(company.teamNetDay, 0, true), company.teamNetDay >= 0 ? 'c-up' : 'c-down', true)}` : ''}
-        ${pending.length ? `<p class="ur-note" style="margin-top:6px">Eğitimdekiler göreve başlayınca yaklaşık ${pending.map((m) => `${esc(m.name || positionName(m.position))} +${money(m.ifActiveValueDay)}`).join(', ')} /gün daha.</p>` : ''}
+        ${pending.length ? `<p class="ur-note" style="margin-top:6px">Eğitimdekiler göreve başlayınca ${pending.map((m) => `${esc(m.name || positionName(m.position))} +${money(m.ifActiveValueDay)}`).join(', ')} /gün daha.</p>` : ''}
         ${!setup.otherWagesDay ? '<p class="ur-note" style="margin-top:6px">Tüm şirket için Yönetim gideri kartına planda olmayan binaların günlük maaşını girin.</p>' : ''}
       </div>`;
     }
     const scoreBox = ex.length ? `<div class="ur-box"><span class="ur-note" style="font-weight:600">Ekip puanı (yalnızca aktif olanlar)</span>
-      <div class="ur-grid4" style="margin-top:6px">${SKILL_LABELS.map(([k, t]) => `<div class="ur-stat"><span>${t}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div>
-      <div class="ur-hr" style="margin:8px 0 4px"></div>${kv('Yönetim puanından tasarruf', `≈ %${H.managementSavingsPct(scores.coo)}`, 'c-price', true)}</div>` : '';
+      <div class="ur-grid2" style="margin-top:6px">${SKILL_LABELS.map(([k, t]) => `<div class="ur-stat"><span>${t}</span><span>${num(scores[k], scores[k] % 1 ? 2 : 0)}</span></div>`).join('')}</div>
+      ${teamEffectsBox(H.teamEffects(ex, { bankLevel: setup.finance.bankLevel }))}</div>` : '';
     return `<section class="ur-card" aria-labelledby="h-exec"><h2 id="h-exec">Yöneticiler</h2>
       <p class="ur-sub">Her yöneticinin becerisi ve günlük maaşı ayrı girilir. Eğitimde, yerleşmekte ya da grevde olanlar etki etmez, maaşları yine ödenir.</p>
       <div class="ur-row"><button type="button" class="ur-btn tint grow" data-act="execApi">${icon('plus')}API'den yapıştır</button><button type="button" class="ur-btn grow" data-act="execNew">${icon('plus')}Elle ekle</button></div>
@@ -876,9 +922,11 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const value = d.active ? m.valueDay : m.ifActiveValueDay;
     return `<div class="ur-box"><span class="ur-note" style="font-weight:600">${d.active ? 'Bu yönetici için (bu plandaki binalar)' : 'Göreve başlarsa (bu plandaki binalar)'}</span>
       ${contrib}<div class="ur-hr"></div>
-      ${kv('Maaşlarda günlük tasarruf', money(value || 0))}${kv('Günlük maaşı', money(d.salary))}
+      ${d.active ? `${kv('Maaşlarda günlük tasarruf', money(m.cooValueDay))}${kv('Ödenmeyen günlük vergi', money(m.cfoValueDay))}` : ''}
+      ${kv('Günlük katkı', money(value || 0), '', true)}${kv('Günlük maaşı', money(d.salary))}
       ${kv('Net', money((value || 0) - d.salary, 0, true), (value || 0) - d.salary >= 0 ? 'c-up' : 'c-down', true)}
-      <p class="ur-note">Yalnız yönetimin maaşa etkisi paraya çevrilir; muhasebe, iletişim ve bilim etkileri dahil değil. Yaklaşıktır.</p></div>`;
+      ${d.active && m.effects && (m.effects.salesSpeedPct > 0 || m.effects.researchSpeedPct > 0) ? `<p class="ur-note">Paraya çevrilmeyen: satış hızı +%${num(m.effects.salesSpeedPct)}, araştırma +%${num(m.effects.researchSpeedPct)}.</p>` : ''}
+      <p class="ur-note">Yönetim maaş tasarrufuna, muhasebe (Kurulum'daki nakde göre) vergiye çevrilir. İletişim ve bilim paraya çevrilmez.</p></div>`;
   }
   function sheetExec() {
     const d = sheet.draft;
@@ -1147,6 +1195,10 @@ export function mountUretim(root, { realm = 0 } = {}) {
       if (f === 'academyLevel' || f === 'otherLevels') return commit({ ...setup, [f]: Math.floor(value) }, soft);
       if (f === 'otherWagesDay') return commit({ ...setup, otherWagesDay: value }, soft);
       if (f === 'extraBonusPct') return commit({ ...setup, extraBonusPct: Math.min(99, value) }, soft);
+      if (f.startsWith('finance.')) {
+        const k = f.slice(8);
+        return commit({ ...setup, finance: { ...setup.finance, [k]: k === 'bankLevel' ? H.clampBankLevel(value) : value } }, soft);
+      }
       return;
     }
     if (!sheet || !t.dataset?.d) return;
@@ -1203,38 +1255,4 @@ export function mountUretim(root, { realm = 0 } = {}) {
   document.addEventListener('pointercancel', onPointerUp, true);
   document.addEventListener('click', onAnyClick, true);
   root.addEventListener('click', onClick);
-  root.addEventListener('change', onChange);
-  root.addEventListener('input', onInput);
-  document.addEventListener('keydown', onKey);
-  window.addEventListener('hashchange', onHash);
-  if (location.hash.split('/')[1] !== tab) history.replaceState(null, '', `#uretim/${tab}`);
-  load();
-
-  return {
-    setRealm(next) {
-      if (next === r) return;
-      clearParked();
-      closeSheet();
-      r = next;
-      setup = loadSetup(r);
-      load();
-    },
-    destroy() {
-      destroyed = true;
-      clearTimeout(toastTimer);
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('pointerup', onPointerUp, true);
-      document.removeEventListener('pointercancel', onPointerUp, true);
-      document.removeEventListener('click', onAnyClick, true);
-      clearTimeout(settleTimer);
-      root.removeEventListener('click', onClick);
-      root.removeEventListener('change', onChange);
-      root.removeEventListener('input', onInput);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('hashchange', onHash);
-      document.body.style.overflow = '';
-      style.remove();
-      root.replaceChildren();
-    },
-  };
-}
+  root.addEventListener('ch
