@@ -2,8 +2,8 @@
 //
 // Arayüzsüz, saf fonksiyonlar: tarayıcıda ve Node'da aynen çalışır; DOM, ağ ya da Firestore bilgisi içermez.
 // Formüller oyunun kendi Üretim ve Kâr hesaplayıcısı, satış ekranı, yönetici ekranları ve Cooper's Tools ile
-// karşılaştırıldı; kanıtlar test/hesap.test.mjs dosyasında. Tek yaklaşık parça, yönetici puanından yönetim gideri
-// tasarrufuna geçen eğri (MANAGEMENT_CURVE).
+// karşılaştırıldı; kanıtlar test/hesap.test.mjs dosyasında. Yönetici etkileri ve vergi (muhasebe ücreti) oyun
+// rehberi ve yedi oyuncunun "Ekibinizin etkisi" ekranıyla doğrulandı.
 //
 // Birimler: para dolar, miktar adet. "Hour" ile biten alanlar saatlik, "Day" ile bitenler günlük (24 saat).
 // Oranlar kesir olarak tutulur (0,62 = %62); kullanıcıdan gelen yüzdeler "Pct" ile biter.
@@ -20,6 +20,7 @@
 //   academyLevel: 20, otherLevels: 0,             // planda olmayan binalar da yönetim giderine girer
 //   admin: { mode: 'savings' | 'net' | 'executives', savingsPct: 62, netPct: 72.65 },
 //   executives: [{ name, position: 'o', salary: 225000, skills: { coo, cfo, cmo, cto }, active: true }],
+//   finance: { cash, bondsBought, bondsIssued, bankLevel }, // vergi ve muhasebecinin (CFO) değeri için
 //   executiveSalaryDay: 0,                        // yönetici listesi yoksa elle girilen günlük toplam maaş
 //   substitution: true,                           // yüksek kalite fazlası aynı ürünün düşük kalite ihtiyacını karşılar
 //   buyPolicy: 'cheapest' | 'exact',              // eksik girdi: izinli kalitelerin en ucuzu mu, tam alt kalite mi
@@ -198,7 +199,6 @@ export function adminInfo(setup, data) {
   } else if (mode === 'executives') {
     savings = managementSavingsPct(teamScores(setup.executives || []).coo) / 100;
     net = gross * (1 - savings);
-    approximate = true;
   } else {
     mode = 'savings';
     savings = clamp(num(a.savingsPct, 0), 0, 100) / 100;
@@ -609,18 +609,82 @@ export function teamScores(executives = []) {
   return out;
 }
 
-// Yönetim puanı → yönetim gideri tasarrufu. Oyun etkin puanı tam sayıya indiriyor; 60'a kadar puan = tasarruf (%),
-// 60 üstünde azalan getiri (oyuncu bilgisi). Eğrinin 60 sonrası biçimi beş oyuncu ölçümüne uydurulmuş bir yaklaşım;
-// ölçümlerle birebir tutuyor, arada ±1 puan sapabilir.
-export const MANAGEMENT_CURVE = { knee: 60, span: 22.3, scale: 35.85 };
+// Etkili beceri (oyun rehberi, oyunun kendi grafiği ve yedi oyuncu ölçümüyle doğrulandı; dört beceride aynı):
+// takım puanı tam sayıya indirilir; 60'a kadar puanın kendisi, 60–80 arası her puan 0,5, 80 üstü her puan 0,25
+// sayılır (69 → 64,5; 96 → 74). Etkiler bu değerin tam sayı kısmından hesaplanır (oyun "etkili yetenek 64" yazar).
+export const SKILL_CURVE = [[60, 1], [80, 0.5], [Infinity, 0.25]];
 
-export function managementSavingsRaw(score) {
-  const x = Math.max(0, num(score, 0));
-  const { knee, span, scale } = MANAGEMENT_CURVE;
-  return x <= knee ? x : knee + span * (1 - Math.exp(-(x - knee) / scale));
+// Sürekli biçim: grafik ve "+1 puanın değeri" için (tam sayıya indirmeden).
+export function effectiveSkillRaw(score) {
+  let x = Math.max(0, num(score, 0));
+  let out = 0;
+  let from = 0;
+  for (const [to, slope] of SKILL_CURVE) {
+    const part = Math.min(x, to - from);
+    out += part * slope;
+    x -= part;
+    from = to;
+    if (x <= 0) break;
+  }
+  return out;
+}
+// Oyunun gösterdiği etkili beceri (grafikteki değer): 69,75 → 69 → 64,5
+export const effectiveSkillShown = (score) => effectiveSkillRaw(Math.floor(num(score, 0) + EPS));
+// Etkilerde kullanılan tam sayı: 64,5 → 64
+export const effectiveSkill = (score) => Math.floor(effectiveSkillShown(score) + EPS);
+
+// Geriye uyumlu adlar: yönetim puanı → yönetim gideri tasarrufu (%), en çok %100.
+export const managementSavingsRaw = (score) => Math.min(100, effectiveSkillRaw(score));
+export const managementSavingsPct = (score) => Math.min(100, effectiveSkill(score));
+
+// Ekibin oyundaki "Ekibinizin etkisi" satırları (oyunda doğrulandı: Dr. Mesar, NothingToLose, Dentium, SFENX, ATLAS).
+export const SKILL_EFFECTS = {
+  salesSpeedPointsPerPct: 3,      // iletişim: her 3 puan +%1 satış hızı (tam sayıya iner)
+  restaurantPerPoint: 0.01,       // iletişim: puan başı +0,01 restoran derecesi
+  researchPctPerPoint: 2,         // bilim: puan başı +%2 araştırma üretim hızı
+  patentPctPerPoint: 0.0625,      // bilim: puan başı +0,0625 puan patent olasılığı (taban %6,25)
+  thresholdPerPoint: 500000,      // muhasebe: puan başı +$0,5M vergilendirme başlangıcı
+  bankPerLevelPerPoint: 50000,    // banka: seviye başı, muhasebe puanı başı +$50k
+};
+export const PATENT_BASE_PCT = 6.25;
+export const TAX_BASE_THRESHOLD = 3000000;
+export const BANK_MAX_LEVEL = 40;
+export const clampBankLevel = (level) => clamp(Math.floor(num(level, 0)), 0, BANK_MAX_LEVEL);
+
+export function teamEffects(executives = [], { bankLevel = 0 } = {}) {
+  const scores = teamScores(executives);
+  const shown = Object.fromEntries(SKILLS.map((k) => [k, effectiveSkillShown(scores[k])]));
+  const eff = Object.fromEntries(SKILLS.map((k) => [k, effectiveSkill(scores[k])]));
+  const E = SKILL_EFFECTS;
+  const bank = clampBankLevel(bankLevel);
+  const perPoint = E.thresholdPerPoint + E.bankPerLevelPerPoint * bank;
+  return {
+    scores, shown, effective: eff, bankLevel: bank,
+    adminSavingsPct: Math.min(100, eff.coo),
+    thresholdPerPoint: perPoint,
+    thresholdLift: eff.cfo * perPoint,
+    salesSpeedPct: Math.floor(eff.cmo / E.salesSpeedPointsPerPct + EPS),
+    restaurantRating: eff.cmo * E.restaurantPerPoint,
+    researchSpeedPct: eff.cto * E.researchPctPerPoint,
+    patentPct: eff.cto * E.patentPctPerPoint,
+  };
 }
 
-export const managementSavingsPct = (score) => Math.floor(managementSavingsRaw(Math.floor(num(score, 0))) + 1e-9);
+// ---------------------------------------------------------------------------------------------------------------
+// Vergi (muhasebe ücreti, AO) — oyun rehberindeki örneklerle doğrulandı
+// ---------------------------------------------------------------------------------------------------------------
+// Vergilenen varlık = nakit + alınan tahvil − ihraç edilen tahvil. Günlük vergi kademeli: eşiğin (T) üstünde
+// T, T+3M, T+6M, T+9M, T+12M'de başlayan beş dilim; her dilim kendi başlangıcının üstündeki tutarın tamamına işler.
+export const TAX_LAYERS = [[0, 0.005], [3000000, 0.005], [6000000, 0.005], [9000000, 0.005], [12000000, 0.01]];
+
+export function assessableAssets(finance = {}) {
+  return num(finance.cash, 0) + num(finance.bondsBought, 0) - num(finance.bondsIssued, 0);
+}
+export function accountingOverheadDay(assets, threshold = TAX_BASE_THRESHOLD) {
+  const a = num(assets, 0);
+  const t = num(threshold, TAX_BASE_THRESHOLD);
+  return sum(TAX_LAYERS, ([offset, rate]) => Math.max(0, a - t - offset) * rate);
+}
 
 // Oyunun /api/v3/companies/{id}/executives/ çıktısını okur. Beceri ve maaş yalnız kendi şirketin çıktısında bulunur.
 export function parseExecutives(input, now = Date.now()) {
@@ -643,45 +707,75 @@ export function parseExecutives(input, now = Date.now()) {
   });
 }
 
-// Yöneticilerin para karşılığı: planın binalarındaki maaş tasarrufu, yöneticilerin maaşıyla karşılaştırılır.
-// Takım toplamı, oyundan girilen tasarruf oranıyla kesindir; kişi başı değerler eğriden hesaplanan farklarla bulunur.
-// scope 'company': planda olmayan binaların günlük maaşı (setup.otherWagesDay, yönetim gideri dahil) da tabana eklenir.
+// Yöneticilerin para karşılığı, günlük:
+// • Yönetim (COO): planın binalarındaki maaş tasarrufu. Takım toplamı, oyundan girilen tasarruf oranına dayanır.
+// • Muhasebe (CFO): vergi eşiğini yükselterek ödenmeyen vergi (setup.finance'teki nakit ve tahvile göre).
+// • İletişim ve bilim: paraya çevrilmez, etki olarak (satış hızı, araştırma hızı) gösterilir.
+// Kişi başı değer: yönetici bugün ayrılsa kaybedilecek tutar; azalan getiri yüzünden toplamları takım toplamına eşit
+// olmayabilir. scope 'company': planda olmayan binaların günlük maaşı (setup.otherWagesDay, yönetim dahil) da eklenir.
 export function executiveAnalysis(setup, data, plan, { scope = 'plan' } = {}) {
   const executives = setup.executives || [];
+  const finance = setup.finance || {};
+  const bankLevel = clampBankLevel(finance.bankLevel);
+  const assets = assessableAssets(finance);
   const { gross, savings, net } = plan.admin;
   const otherBaseDay = scope === 'company' ? Math.max(0, num(setup.otherWagesDay, 0)) / (1 + net) : 0;
   const baseDay = plan.totals.wageBaseDay + otherBaseDay; // yönetim gideri eklenmemiş günlük maaş tabanı
   const moneyPerPct = (baseDay * gross) / 100; // tasarruftaki her %1'in günlük değeri
-  const scores = teamScores(executives);
+  const team = teamEffects(executives, { bankLevel });
+  const scores = team.scores;
   const curveNow = managementSavingsPct(scores.coo);
+  const taxOf = (list) => accountingOverheadDay(assets, TAX_BASE_THRESHOLD + teamEffects(list, { bankLevel }).thresholdLift);
+  const taxNow = accountingOverheadDay(assets, TAX_BASE_THRESHOLD + team.thresholdLift);
+  const taxWithoutDay = accountingOverheadDay(assets, TAX_BASE_THRESHOLD);
+  const effectDrop = (list) => {
+    const o = teamEffects(list, { bankLevel });
+    return { salesSpeedPct: team.salesSpeedPct - o.salesSpeedPct, restaurantRating: team.restaurantRating - o.restaurantRating,
+      researchSpeedPct: team.researchSpeedPct - o.researchSpeedPct, patentPct: team.patentPct - o.patentPct,
+      thresholdLift: team.thresholdLift - o.thresholdLift };
+  };
   const members = executives.map((e, index) => {
     const others = executives.filter((_, j) => j !== index);
     const dropPct = curveNow - managementSavingsPct(teamScores(others).coo);
-    const valueDay = e.active === false ? 0 : Math.max(0, Math.min(savings * 100, dropPct)) * moneyPerPct;
+    const active = e.active !== false;
+    const cooValueDay = active ? Math.max(0, Math.min(savings * 100, dropPct)) * moneyPerPct : 0;
+    const cfoValueDay = active ? Math.max(0, taxOf(others) - taxNow) : 0;
+    const valueDay = cooValueDay + cfoValueDay;
     let ifActiveValueDay = null;
-    if (e.active === false) {
+    let ifActive = null;
+    if (!active) {
       const activated = executives.map((x, j) => (j === index ? { ...x, active: true } : x));
-      ifActiveValueDay = (managementSavingsPct(teamScores(activated).coo) - curveNow) * moneyPerPct;
+      const cooGain = (managementSavingsPct(teamScores(activated).coo) - curveNow) * moneyPerPct;
+      const cfoGain = Math.max(0, taxNow - taxOf(activated));
+      ifActiveValueDay = Math.max(0, cooGain) + cfoGain;
+      const t = teamEffects(activated, { bankLevel });
+      ifActive = { salesSpeedPct: t.salesSpeedPct - team.salesSpeedPct, researchSpeedPct: t.researchSpeedPct - team.researchSpeedPct };
     }
     const weight = skillWeight(e.position, 'coo');
-    const perPointDay = e.active === false || weight === 0 ? 0
+    const perPointDay = !active || weight === 0 ? 0
       : (managementSavingsRaw(scores.coo + weight) - managementSavingsRaw(scores.coo)) * moneyPerPct;
     const salary = num(e.salary, 0);
     return {
-      index, name: e.name, position: e.position, ...execKind(e.position), active: e.active !== false, salary, weight,
-      valueDay, // bu yönetici bugün ayrılsa kaybedilecek günlük maaş tasarrufu (en fazla ödemeye değer maaş)
+      index, name: e.name, position: e.position, ...execKind(e.position), active, salary, weight,
+      cooValueDay, cfoValueDay,
+      valueDay, // bu yönetici bugün ayrılsa kaybedilecek günlük para (en fazla ödemeye değer maaş)
       netDay: valueDay - salary,
       ratio: salary > 0 ? valueDay / salary : null,
-      ifActiveValueDay, // eğitimi bitip göreve başlayınca eklenecek günlük tasarruf
-      perPointDay, // yönetim becerisi +1 olursa günlük ek tasarruf (yaklaşık)
+      effects: active ? effectDrop(others) : null, // paraya çevrilmeyen etkiler: ayrılsa kaybedilecek
+      ifActiveValueDay, ifActive, // eğitimi bitip göreve başlayınca eklenecekler
+      perPointDay, // yönetim becerisi +1 olursa günlük ek tasarruf (ortalama)
     };
   });
-  const teamValueDay = baseDay * gross * savings;
+  const teamCooValueDay = baseDay * gross * savings;
+  const teamCfoValueDay = Math.max(0, taxWithoutDay - taxNow);
+  const teamValueDay = teamCooValueDay + teamCfoValueDay;
   const salariesDay = sum(executives, (e) => num(e.salary, 0));
   return {
-    scope, scores, curvePct: curveNow, savings, gross, baseDay, otherBaseDay, moneyPerPct,
-    teamValueDay, salariesDay, teamNetDay: teamValueDay - salariesDay,
-    exact: plan.admin.mode !== 'executives', // takım toplamı oyundan girilen orana dayanıyorsa kesin
+    scope, scores, team, curvePct: curveNow, savings, gross, baseDay, otherBaseDay, moneyPerPct,
+    assets, bankLevel, threshold: TAX_BASE_THRESHOLD + team.thresholdLift, taxDay: taxNow, taxWithoutDay,
+    teamCooValueDay, teamCfoValueDay, teamValueDay, salariesDay, teamNetDay: teamValueDay - salariesDay,
+    exact: true,
     members,
   };
 }
+
