@@ -89,6 +89,11 @@ test('CMO: ekip dışı %20 satış hızı varken marj $130.000 → katkı $10.0
   const s = Y.executiveSimulation({ executives: [ex('P', 'm', 1000, 0, 0, 30, 0)], retail: { marginDay: 130000, otherSpeedPct: 20 } });
   near(s.sectors.cmo, 10000, 4);
 });
+test('CTO 60 (+%120): çarpan mantığı, 40.614 araştırma × $100 → katkı = üretim × 120 ÷ 220', () => {
+  const s = Y.executiveSimulation({ executives: [ex('B', 't', 1000, 0, 0, 0, 60)], research: { outputDay: 40614, price: 100 } });
+  eq(s.team.researchSpeedPct, 120);
+  near(s.sectors.cto, 40614 * 100 * 120 / 220, 2); // ekipsiz üretim 18.461 → ekip günde 22.153 adet ekliyor
+});
 test('CTO 30 (+%60 araştırma hızı): günde 160 araştırma × $100 → katkı $6.000/gün', () => {
   const s = Y.executiveSimulation({ executives: [ex('B', 't', 1000, 0, 0, 0, 30)], research: { outputDay: 160, price: 100 } });
   eq(s.team.researchSpeedPct, 60);
@@ -157,6 +162,41 @@ test('Üretim kurulumundan taşıma: yöneticiler ve nakit gelir; boşsa null', 
   const c = Y.companyFromUretim({ executives: DENTIUM, finance: { cash: 5e6, bondsBought: 1e6 } });
   eq([c.executives.length, c.finance.cash, c.finance.bondsBought], [7, 5e6, 1e6]);
   eq(Y.companyFromUretim({ executives: [], finance: {} }), null);
+});
+
+section('Ortak şirket kaydı (Üretim ve Yönetim aynı kaydı okur)');
+function withStorage(initial, fn) {
+  const store = { ...initial };
+  globalThis.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+  try { return fn(store); } finally { delete globalThis.localStorage; }
+}
+test('Kayıt yoksa boş şirket; kaydedilen kayıt geri okunur, banka seviyesi 40 ile sınırlı', () => {
+  withStorage({}, () => {
+    eq(Y.loadCompanyRecord(0).company.executives.length, 0);
+    const c = Y.sanitizeCompany({ finance: { cash: 1000, bankLevel: 99 }, executives: [ex('B', 't', 1000, 0, 0, 0, 60)] });
+    ok(Y.saveCompanyRecord(0, c));
+    const back = Y.loadCompanyRecord(0).company;
+    eq(back.finance.bankLevel, 40);
+    eq(back.executives.length, 1);
+    eq(back.finance.cash, 1000);
+  });
+});
+test('Şirket kaydı yoksa eski Üretim kurulumundaki yönetici ve nakit bir kez taşınır; sonra kayıt kullanılır', () => {
+  const old = { executives: [ex('B', 't', 1000, 0, 0, 0, 60)], finance: { cash: 5e6, bankLevel: 3 } };
+  withStorage({ 'dentsimco.uretim.r0': JSON.stringify(old) }, (store) => {
+    const first = Y.loadCompanyRecord(0);
+    eq(first.migrated, true);
+    eq(first.company.finance.bankLevel, 3);
+    ok(store['dentsimco.sirket.r0'], 'şirket kaydı yazılmalı');
+    eq(Y.loadCompanyRecord(0).migrated, false);
+  });
+});
+test('Realmler ayrı kayıt tutar', () => {
+  withStorage({}, () => {
+    Y.saveCompanyRecord(1, Y.sanitizeCompany({ finance: { cash: 7 } }));
+    eq(Y.loadCompanyRecord(0).company.finance.cash, 0);
+    eq(Y.loadCompanyRecord(1).company.finance.cash, 7);
+  });
 });
 
 // ---- rapor ----
