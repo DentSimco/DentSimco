@@ -108,6 +108,10 @@ export function sanitizeCompany(raw) {
   return c;
 }
 
+// Tarayıcı kaydı: Üretim, Yönetim ve ileride Perakende aynı şirket kaydını okur ve yazar.
+export const COMPANY_KEY = (r) => `dentsimco.sirket.r${r}`;
+const URETIM_KEY = (r) => `dentsimco.uretim.r${r}`;
+
 // Üretim kurulumundan (eski yer) yöneticileri ve nakdi bir kez taşır
 export function companyFromUretim(uretimSetup) {
   if (!uretimSetup || typeof uretimSetup !== 'object') return null;
@@ -199,4 +203,18 @@ export function executiveSimulation(rawCompany) {
     plan: now.plan, planWithout: none.plan, upgradeSaving: none.plan.cost - now.plan.cost,
     members,
   };
+}
+
+// Kayıt yoksa eski Üretim kurulumundaki yöneticileri ve nakdi bir kez taşır. Hata olursa (gizli sekme, Node) boş şirket döner.
+export function loadCompanyRecord(r) {
+  try {
+    const raw = localStorage.getItem(COMPANY_KEY(r));
+    if (raw) return { company: sanitizeCompany(JSON.parse(raw)), migrated: false };
+    const moved = companyFromUretim(JSON.parse(localStorage.getItem(URETIM_KEY(r)) || 'null'));
+    if (moved) { localStorage.setItem(COMPANY_KEY(r), JSON.stringify(moved)); return { company: moved, migrated: true }; }
+  } catch { /* gizli sekme ya da bozuk kayıt */ }
+  return { company: defaultCompany(), migrated: false };
+}
+export function saveCompanyRecord(r, company) {
+  try { localStorage.setItem(COMPANY_KEY(r), JSON.stringify(company)); return true; } catch { return false; }
 }
