@@ -6,6 +6,7 @@
 import { readDocs, PATHS, dataField } from './veri.js';
 import * as H from './hesap.js';
 import * as Y from './yonetici.js';
+import { guideCard } from './rehber.js';
 
 const STORE_KEY = (r) => `dentsimco.uretim.r${r}`;
 const TAB_KEY = 'dentsimco.uretim.tab';
@@ -634,7 +635,12 @@ export function mountUretim(root, { realm = 0 } = {}) {
     const levels = rows.reduce((t, x) => t + (x.level || 0), 0);
     const cards = (setup.buildings || []).map((b, i) => buildingCard(b, rows[i], i)).join('');
     const empty = `<div class="ur-card ur-empty"><h2>Henüz bina yok</h2><p class="ur-sub">Bina ekleyin: tür, ürün, kalite ve seviye seçin. Eksik girdiler aşağıda listelenir ve tek dokunuşla eklenir.</p></div>`;
+    // Rehber kartı: toplam üretim hızı (rekreasyon + elle girilen) ve ekiple net yönetim gideri; Perakende ile aynı kart
+    const speed = H.recreationBonus(setup.recreation) + (Number(setup.extraBonusPct) || 0) / 100;
+    const frac = (x) => (Math.abs(x * 100 - Math.round(x * 100)) > 1e-6 ? 1 : 0);
     return `
+      ${guideCard({ title: 'Üretim', lead: 'Binalarınızın ne kadar ürettiğini ve ne kadar maaş ödediğini hesaplar.',
+        chips: [[`Toplam üretim bonusu ${pctText(speed, frac(speed))}`, speed > 0 ? '' : 'muted'], [`Yönetim gideri ${pctText(plan.admin.net, frac(plan.admin.net))}`, 'muted']] })}
       <div class="ur-stats">
         <div class="ur-stat"><span>Bina</span><span>${num(rows.length)}</span></div>
         <div class="ur-stat"><span>Plan seviyesi</span><span>${num(levels)}</span></div>

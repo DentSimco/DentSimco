@@ -10,6 +10,7 @@ import * as H from './hesap.js';
 import * as Y from './yonetici.js';
 import { CSS, parseNum } from './uretim.js';
 import * as R from './hesap-perakende.js';
+import { guideCard } from './rehber.js';
 
 const STORE_KEY = (r) => `dentsimco.perakende.r${r}`;
 const TAB_KEY = 'dentsimco.perakende.tab';
@@ -52,6 +53,7 @@ const pctText = (x) => `%${num(x, Math.abs(x % 1) > 1e-6 ? 1 : 0)}`;
 
 const ICON = {
   plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>', close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>', edit: '<path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/>',
 };
@@ -91,6 +93,11 @@ const EXTRA_CSS = `
 .pk-step { display: flex; align-items: center; gap: 8px; }
 .pk-step input[type="text"] { text-align: center; font-size: 22px; height: 50px; }
 .pk-step .ur-btn { min-width: 50px; min-height: 50px; padding: 0; }
+.pk-fold { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 12px;
+  background: var(--raise); color: var(--text); font: 600 16px var(--font); text-align: left; }
+.pk-fold .grow { flex: 1 1 auto; }
+.pk-fold svg { width: 20px; height: 20px; flex: none; transition: transform 0.2s; }
+.pk-fold[aria-expanded="true"] svg { transform: rotate(180deg); }
 .pk-svg { width: 100%; height: auto; display: block; }
 .pk-svg text { fill: var(--muted); font-size: 11px; font-family: var(--font); }
 `;
@@ -463,31 +470,46 @@ export function mountPerakende(root, { realm = 0 } = {}) {
   }
 
   // ---- BİNALAR ----
+  function buildingCard(c, b, line, i) {
+    const title = esc(nameOf(b.product));
+    const chips = [];
+    if (line?.ok) {
+      chips.push(chip(`PPHPL ${money(line.pphpl, 2)}`, line.pphpl > 0 ? 'up' : 'down'));
+      chips.push(chip(`Kâr ${money(line.profitDay)}/gün`, line.profitDay > 0 ? 'up' : 'down'));
+      chips.push(chip(`Fiyat ${price(line.price)}${b.price == null ? ' (en kârlı)' : ''}`, 'muted'));
+      chips.push(chip(`Maliyet ${price(line.cAct)}${b.cost == null ? (marketOf(b.product, b.quality) != null ? ' (borsa)' : ' (model)') : ''}`, 'muted'));
+      if (!line.sellable) chips.push(chip('Bu maliyetle satılmaz', 'down'));
+    } else chips.push(chip(line?.reason || 'Hesaplanamadı', 'down'));
+    return `<article class="ur-card" aria-label="${title}, ${esc(buildingName(b.letter))}, seviye ${b.level}">
+      <div class="ur-row" style="gap:12px">
+        <div class="grow"><div class="ur-row" style="flex-wrap:wrap;gap:6px"><span style="font:600 19px var(--font-c)">${title}</span>${chip(`Q${b.quality}`)}${badge(c.ctx.saturation[b.product])}</div>
+          <span class="ur-note">${esc(buildingName(b.letter))}</span></div>
+        <div class="ur-level"><small>Seviye</small><b>${num(b.level)}</b></div></div>
+      <div class="ur-hr"></div>
+      <div class="ur-metrics">
+        <div class="ur-stat"><span>Saatlik</span><span class="c-price">${line?.ok ? num(line.unitsHour, 2) : '—'}</span></div>
+        <div class="ur-stat"><span>Günlük</span><span>${line?.ok ? num(line.unitsDay) : '—'}</span></div>
+        <div class="ur-stat"><span>Maaş/gün</span><span>${line?.ok ? money(line.wagesHour * 24) : '—'}</span></div></div>
+      <div class="ur-chips">${chips.join('')}</div>
+      <div class="ur-row"><button type="button" class="ur-btn tint grow" data-act="edit" data-i="${i}">${icon('edit')}Düzenle</button>
+        <button type="button" class="ur-btn" data-act="copy" data-i="${i}" aria-label="Aynı özelliklerle kopyala">${icon('copy')}</button>
+        <button type="button" class="ur-btn danger" data-act="del" data-i="${i}" aria-label="Sil">${icon('trash')}</button></div>
+    </article>`;
+  }
   function viewBinalar(c, ev) {
     const t = ev.totals;
-    const list = setup.buildings.map((b, i) => {
-      const line = ev.buildings[i]?.lines[0];
-      const auto = [];
-      if (b.price == null) auto.push('en kârlı fiyat');
-      if (b.cost == null) auto.push(marketOf(b.product, b.quality) != null ? 'borsa maliyeti' : 'model maliyeti');
-      return `<div class="ur-line"><div class="grow">
-          <div class="ur-row" style="flex-wrap:wrap"><span class="title">${esc(nameOf(b.product))}</span>${chip(`Q${b.quality}`)}${badge(c.ctx.saturation[b.product])}</div>
-          <span class="ur-note">${esc(buildingName(b.letter))} · seviye ${num(b.level)} · fiyat ${line?.ok ? esc(price(line.price)) : '—'}${auto.length ? ` (${auto.join(', ')})` : ''}</span><br>
-          <span class="ur-note">PPHPL ${line?.ok ? `<b class="${cls(line.pphpl)}">${money(line.pphpl, 2)}</b>` : '—'} · günlük kâr <b class="${cls(line?.profitDay)}">${line?.ok ? money(line.profitDay) : esc(line?.reason || '—')}</b></span></div>
-        <button type="button" class="ur-btn" data-act="edit" data-i="${i}" aria-label="${esc(nameOf(b.product))} düzenle">${icon('edit')}</button>
-        <button type="button" class="ur-btn danger" data-act="del" data-i="${i}" aria-label="${esc(nameOf(b.product))} sil">${icon('trash')}</button></div>`;
-    }).join('');
+    const cards = setup.buildings.map((b, i) => buildingCard(c, b, ev.buildings[i]?.lines[0], i)).join('');
+    const empty = '<div class="ur-card ur-empty"><h2>Henüz bina yok</h2><p class="ur-sub">Bina ekleyin: tür, ürün, seviye ve kalite seçin. PPHPL Max sekmesindeki önerilerden de ekleyebilirsiniz.</p></div>';
     return `
-      <section class="ur-card" aria-labelledby="h-pk"><h2 id="h-pk">Perakende</h2>
-        <p class="ur-sub">Mağazalarınızın hangi ürünle ne kadar kazandıracağını hesaplar. PPHPL, bir bina seviyesinin saatlik kârıdır (maaş düşülmüş).</p>
-        ${headChips(c)}<p class="ur-note">Faz, rekreasyon ve satış hızı Kurulum'da; ekip <a href="#yonetim/satis" style="color:var(--accent)">Yönetim › Satış</a> sekmesinde.</p></section>
-      ${setup.buildings.length ? `<section class="ur-card" aria-label="Toplam"><div class="ur-metrics">
+      ${guideCard({ title: 'Perakende', lead: 'Mağazalarınızın hangi ürünle ne kadar kazandıracağını hesaplar. PPHPL, bir bina seviyesinin saatlik kârıdır (maaş düşülmüş).',
+        chips: [[`Toplam satış bonusu ${pctText(c.bonusPct)}`, c.bonusPct > 0 ? '' : 'muted'], [`Yönetim gideri ${pctText(c.ctx.adminNet * 100)}`, 'muted'],
+          data.hasRetailInfo ? null : ['Doygunluk botta yok', 'down']] })}
+      ${setup.buildings.length ? `<div class="ur-stats">
         <div class="ur-stat"><span>Günlük kâr</span><span class="${cls(t.profitDay)}">${money(t.profitDay)}</span></div>
-        <div class="ur-stat"><span>Günlük satış</span><span>${num(t.unitsDay)} adet</span></div>
-        <div class="ur-stat"><span>Kullanılan seviye</span><span>${num(t.levels)}</span></div></div></section>` : ''}
-      <section class="ur-card" aria-labelledby="h-list"><div class="ur-head"><h2 id="h-list">Binalar</h2>${chip(`${setup.buildings.length} bina`, 'muted')}</div>
-        ${list || '<p class="ur-note">Henüz bina yok. Bina ekle ile başlayın ya da PPHPL Max sekmesindeki önerilerden ekleyin.</p>'}
-        <button type="button" class="ur-btn primary" data-act="add">${icon('plus')}Bina ekle</button></section>`;
+        <div class="ur-stat"><span>Toplam maaş</span><span>${money(t.wagesDay)}</span></div>
+        <div class="ur-stat"><span>Kullanılan seviye</span><span>${num(t.levels)}</span></div></div>` : ''}
+      <button type="button" class="ur-btn primary" data-act="add" style="width:100%">${icon('plus')}Bina ekle</button>
+      ${setup.buildings.length ? `<div class="ur-bgrid">${cards}</div>` : empty}`;
   }
 
   // ---- PPHPL MAX ----
@@ -703,10 +725,12 @@ export function mountPerakende(root, { realm = 0 } = {}) {
         const dem = demandOf(c.ctx.saturation[id]);
         return `<option value="${id}" ${d.product === id ? 'selected' : ''}>${esc(nameOf(id))} — ${dem ? `${dem.label} talep` : 'talep verisi yok'}</option>`;
       }).join('')}`;
-      rest = `<section aria-labelledby="h-top"><h2 id="h-top" style="font-size:17px">En kârlı 10 ürün</h2>
-          <p class="ur-note">Borsa maliyeti ve en kârlı fiyatla, kalitesiyle birlikte. Dokununca ürün ve kalite seçilir.</p>
-          <div style="margin-top:6px">${picks || '<p class="ur-note">Bu bina için doygunluk verisi yok.</p>'}</div></section>
-        <label class="ur-field"><span>Ürün</span><select data-d="product" aria-label="Ürün">${popts}</select></label>`;
+      const topOpen = sheet.topOpen ?? !d.product; // ürün seçilince kendiliğinden kapanır
+      rest = `<label class="ur-field"><span>Ürün</span><select data-d="product" aria-label="Ürün">${popts}</select></label>
+        <section aria-label="En kârlı 10 ürün"><button type="button" class="pk-fold" data-act="toggleTop" aria-expanded="${topOpen}" aria-controls="pk-top">
+            <span class="grow">En kârlı 10 ürün</span>${chip(`${top.length} ürün`, 'muted')}${icon('chev')}</button>
+          <div id="pk-top" ${topOpen ? '' : 'hidden'}><p class="ur-note" style="margin-top:8px">Borsa maliyeti ve en kârlı fiyatla, kalitesiyle birlikte. Dokununca ürün ve kalite seçilir.</p>
+            <div style="margin-top:6px">${picks || '<p class="ur-note">Bu bina için kâr getiren ürün yok.</p>'}</div></div></section>`;
       if (d.product) {
         const sat = c.ctx.saturation[d.product];
         const qs = qualityOptions(c, d.letter, d.product);
@@ -790,7 +814,8 @@ export function mountPerakende(root, { realm = 0 } = {}) {
     const c = context();
     if (sheet) {
       const d = sheet.draft;
-      if (act === 'pick') { const [p, q] = btn.dataset.v.split('|').map(Number); setProduct(d, c, p, q); return renderSheet(); }
+      if (act === 'toggleTop') { sheet.topOpen = !(sheet.topOpen ?? !d.product); return renderSheet(); }
+      if (act === 'pick') { const [p, q] = btn.dataset.v.split('|').map(Number); setProduct(d, c, p, q); sheet.topOpen = false; return renderSheet(); }
       if (act === 'step') { d.level = Math.max(0, (d.level || 0) + Number(btn.dataset.v)); return renderSheet(); }
       if (act === 'useBest') { const best = bestQuality(c, d.letter, d.product); if (best) d.quality = best.quality; return renderSheet(); }
     }
@@ -804,6 +829,15 @@ export function mountPerakende(root, { realm = 0 } = {}) {
       const b = setup.buildings[i];
       if (b) openSheet({ ...b, index: i });
       return;
+    }
+    if (act === 'copy') {
+      const i = Number(btn.dataset.i);
+      const b = setup.buildings[i];
+      if (!b) return;
+      const next = clone();
+      next.buildings.splice(i + 1, 0, { ...b, id: uid() });
+      commit(next);
+      return toast('Bina kopyalandı.');
     }
     if (act === 'del') {
       const next = clone();
@@ -837,8 +871,8 @@ export function mountPerakende(root, { realm = 0 } = {}) {
       const d = sheet.draft;
       const c = context();
       const k = t.dataset.d;
-      if (k === 'letter') { d.letter = t.value; setProduct(d, c, null); }
-      else if (k === 'product') setProduct(d, c, Number(t.value));
+      if (k === 'letter') { d.letter = t.value; setProduct(d, c, null); sheet.topOpen = undefined; }
+      else if (k === 'product') { setProduct(d, c, Number(t.value)); sheet.topOpen = false; }
       else if (k === 'quality') { d.quality = Number(t.value); d.cost = null; }
       else if (k === 'level') d.level = toInt(parseNum(t.value));
       else if (k === 'cost') d.cost = posNum(parseNum(t.value));
