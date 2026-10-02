@@ -91,6 +91,32 @@ test('r_max fiyatındaki kâr, kapalı formdaki pphpl_max ile aynı; r_max gerç
     }
   }
 });
+test('Maliyet c + 2z\'yi geçerse hiçbir fiyatta satılmaz: pphpl_max = −S (eksi × eksi = artı hatası olmasın)', () => {
+  const o = { economy: 1, productId: 3, quality: 0, saturation: 1.2, bonusPct: 12, wage: 100 };
+  const m = R.calcProduct({ ...o, cAct: 1 });
+  const dear = m.rZero + 5; // satış fiyatı tavanının bile üstünde bir maliyet
+  const r = R.calcProduct({ ...o, cAct: dear });
+  eq(r.sellable, false); eq(r.usphplMax, 0); near(r.pphplMax, -100, 9);
+  near(r.pphpl, -100, 9); eq(r.usphpl, 0);
+  // sınırda: maliyet tam c + 2z iken satış sıfır, kâr −S
+  near(R.calcProduct({ ...o, cAct: m.rZero }).pphplMax, -100, 6);
+});
+test('Sıralamada bu yüzden pahalı ürün üste çıkmaz: sıralanan pphpl_max, aynı maliyetle tek tek hesaplanana eşit', () => {
+  const costFor = (id) => (id === 3 ? 500 : null); // elma modelin çok üstünde pahalı
+  const list = R.rankBuilding({ letter: 'G', economy: 1, ctx: ctxOf(), costFor });
+  const apple = list.find((x) => x.productId === 3);
+  if (apple) { ok(apple.pphplMax < 0, `elma pphplMax=${apple.pphplMax}`); ok(list[0].productId !== 3, 'elma birinci olmamalı'); }
+});
+test('Liste ile panel aynı sayıyı verir: her maliyette (ucuzdan satılamayacak kadar pahalıya) otomatik fiyattaki pphpl ≈ pphpl_max', () => {
+  const o = { economy: 1, productId: 11, quality: 3, saturation: 1.0, bonusPct: 18, wage: 250 };
+  const m = R.calcProduct({ ...o, cAct: 1 });
+  for (const mult of [0.2, 0.6, 1, 2, 5, 20, 100]) {
+    const r = R.calcProduct({ ...o, cAct: m.model.c * mult });
+    const tol = Math.max(1, Math.abs(r.pphplMax) * 0.002);
+    ok(Math.abs(r.pphpl - r.pphplMax) <= tol, `maliyet ×${mult}: pphpl ${r.pphpl} ≠ pphpl_max ${r.pphplMax}`);
+    if (!r.sellable) ok(r.pphplMax <= 0 && r.usphpl === 0, `satılamayan ürün kârlı görünmesin (×${mult})`);
+  }
+});
 test('Fiyat boş bırakılırsa r_max (kuruşa yuvarlı) kullanılır ve işaretlenir; maliyet boşsa modeldeki c', () => {
   const r = R.calcProduct({ economy: 1, productId: 3, quality: 0, saturation: 1.2 });
   eq(r.priceAuto, true); eq(r.costAuto, true);
